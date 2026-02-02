@@ -1,0 +1,16 @@
+{
+  "domain": "bluetooth_sig_devices",
+  "name": "Bluetooth SIG Devices",
+  "codeowners": ["@RonanB96"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "after_dependencies": ["bluetooth_adapters"],
+  "documentation": "https://ronanb96.github.io/bluetooth-sig-python/",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "requirements": [
+    "bluetooth-sig-python"
+  ],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}
