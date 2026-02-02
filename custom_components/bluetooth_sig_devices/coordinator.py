@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 
+from bluetooth_sig.advertising import SIGCharacteristicData
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
-from bluetooth_sig.types.advertising.result import AdvertisementData
+from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.types.advertising import AdvertisementData
+from bluetooth_sig.types.gatt_enums import ValueType
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
@@ -64,6 +67,17 @@ class BluetoothSIGCoordinator:
             PassiveBluetoothDataUpdate with entity data
         """
         address = service_info.address
+
+        _LOGGER.debug(
+            "Processing device %s (name=%s, rssi=%s, mfr_data=%d, svc_data=%d)",
+            address,
+            service_info.name or "unknown",
+            service_info.rssi,
+            len(service_info.manufacturer_data)
+            if service_info.manufacturer_data
+            else 0,
+            len(service_info.service_data) if service_info.service_data else 0,
+        )
 
         # Get or create device instance
         if address not in self.devices:
@@ -192,39 +206,175 @@ class BluetoothSIGCoordinator:
         entity_names: dict[PassiveBluetoothEntityKey, str | None],
         entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
     ) -> None:
-        """Add entities from interpreted advertising data.
-
-        Uses reflection to extract fields from the interpreted data object.
-        """
-        if not hasattr(interpreted_data, "__dict__"):
-            _LOGGER.debug("Interpreted data has no __dict__, cannot extract fields")
+        """Add entities from interpreted advertising data."""
+        # Handle SIGCharacteristicData from the library
+        if isinstance(interpreted_data, SIGCharacteristicData):
+            self._add_sig_characteristic_entity(
+                device_id,
+                interpreted_data,
+                entity_descriptions,
+                entity_names,
+                entity_data,
+            )
             return
 
-        # Use reflection to extract all fields from the interpreted data
-        for field_name, value in interpreted_data.__dict__.items():
-            if field_name.startswith("_"):
-                # Skip private fields
-                continue
+        _LOGGER.debug(
+            "Unknown interpreted data type %s for device %s",
+            type(interpreted_data).__name__,
+            device_id,
+        )
 
-            # Only include serializable types
-            if not isinstance(value, (str, int, float, bool)):
-                continue
+    def _add_sig_characteristic_entity(
+        self,
+        device_id: str,
+        data: SIGCharacteristicData,
+        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
+        entity_names: dict[PassiveBluetoothEntityKey, str | None],
+        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+    ) -> None:
+        """Add entity from SIGCharacteristicData using library metadata."""
+        # Get characteristic class and metadata from registry
+        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(data.uuid)
+        if char_class is None:
+            _LOGGER.debug(
+                "No characteristic class found for UUID %s on device %s",
+                data.uuid,
+                device_id,
+            )
+            return
 
-            # Create entity key
-            entity_key = PassiveBluetoothEntityKey(field_name, device_id)
+        char_instance = char_class()
+        char_name = char_instance.name
+        unit = char_instance.unit
+        value_type = char_instance.value_type
+        parsed_value = data.parsed_value
 
-            # Create entity description based on field type and name
-            entity_descriptions[entity_key] = SensorEntityDescription(
-                key=field_name,
-                name=field_name.replace("_", " ").title(),
-                state_class=self._determine_state_class(field_name, value),
+        uuid_obj = BluetoothUUID(data.uuid)
+
+        _LOGGER.debug(
+            "Processing %s (uuid=%s, value_type=%s, unit=%s) for device %s",
+            char_name,
+            uuid_obj.short_form,
+            value_type.name,
+            unit,
+            device_id,
+        )
+
+        # Handle based on ValueType from library
+        if value_type in (ValueType.INT, ValueType.FLOAT):
+            self._add_simple_entity(
+                device_id,
+                str(data.uuid),
+                char_name,
+                parsed_value,
+                unit,
+                entity_descriptions,
+                entity_names,
+                entity_data,
+            )
+        elif value_type in (ValueType.VARIOUS, ValueType.BITFIELD):
+            self._add_struct_entities(
+                device_id,
+                str(data.uuid),
+                char_name,
+                parsed_value,
+                unit,
+                entity_descriptions,
+                entity_names,
+                entity_data,
+            )
+        elif value_type == ValueType.STRING:
+            self._add_simple_entity(
+                device_id,
+                str(data.uuid),
+                char_name,
+                parsed_value,
+                None,
+                entity_descriptions,
+                entity_names,
+                entity_data,
+            )
+        else:
+            _LOGGER.debug(
+                "Unhandled value_type %s for %s on device %s",
+                value_type.name,
+                char_name,
+                device_id,
             )
 
-            # Format field name as entity name
-            entity_names[entity_key] = field_name.replace("_", " ").title()
+    def _add_simple_entity(
+        self,
+        device_id: str,
+        uuid: str,
+        name: str,
+        value: int | float | str | bool,
+        unit: str | None,
+        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
+        entity_names: dict[PassiveBluetoothEntityKey, str | None],
+        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+    ) -> None:
+        """Add a simple single-value entity."""
+        entity_key = PassiveBluetoothEntityKey(uuid, device_id)
+        entity_descriptions[entity_key] = SensorEntityDescription(
+            key=uuid,
+            name=name,
+            native_unit_of_measurement=unit,
+            state_class=SensorStateClass.MEASUREMENT
+            if isinstance(value, (int, float))
+            else None,
+        )
+        entity_names[entity_key] = name
+        entity_data[entity_key] = value
+        _LOGGER.debug(
+            "Added entity %s = %s %s for device %s", name, value, unit or "", device_id
+        )
 
-            # Store the value
-            entity_data[entity_key] = value
+    def _add_struct_entities(
+        self,
+        device_id: str,
+        uuid: str,
+        char_name: str,
+        struct_value: object,
+        unit: str | None,
+        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
+        entity_names: dict[PassiveBluetoothEntityKey, str | None],
+        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+    ) -> None:
+        """Add entities from a msgspec Struct with multiple fields."""
+        # msgspec Structs have __struct_fields__ tuple
+        if not hasattr(struct_value, "__struct_fields__"):
+            _LOGGER.debug(
+                "Value for %s is not a struct, cannot extract fields", char_name
+            )
+            return
+
+        for field_name in struct_value.__struct_fields__:
+            field_value = getattr(struct_value, field_name)
+            # Only create entities for primitive types
+            if not isinstance(field_value, (int, float, str, bool)):
+                continue
+
+            entity_key = PassiveBluetoothEntityKey(f"{uuid}_{field_name}", device_id)
+            field_display_name = f"{char_name} {field_name.replace('_', ' ').title()}"
+
+            entity_descriptions[entity_key] = SensorEntityDescription(
+                key=f"{uuid}_{field_name}",
+                name=field_display_name,
+                native_unit_of_measurement=unit
+                if isinstance(field_value, (int, float))
+                else None,
+                state_class=SensorStateClass.MEASUREMENT
+                if isinstance(field_value, (int, float))
+                else None,
+            )
+            entity_names[entity_key] = field_display_name
+            entity_data[entity_key] = field_value
+            _LOGGER.debug(
+                "Added struct field entity %s = %s for device %s",
+                field_display_name,
+                field_value,
+                device_id,
+            )
 
     def _add_service_data_entities(
         self,

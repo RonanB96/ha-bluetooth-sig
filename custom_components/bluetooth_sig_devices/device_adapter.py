@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable
 
+from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
 from bluetooth_sig.device.connection import ConnectionManagerProtocol
 from bluetooth_sig.types.advertising import (
     AdvertisementData,
@@ -77,6 +78,7 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
             msg = f"Expected BluetoothServiceInfoBleak, got {type(advertisement)}"
             raise TypeError(msg)
 
+        advertisement: BluetoothServiceInfoBleak = advertisement
         # Extract manufacturer data - convert to ManufacturerData objects
         manufacturer_data: dict[int, ManufacturerData] = {}
         if advertisement.manufacturer_data:
@@ -167,11 +169,67 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
             ),
         )
 
+        # Parse advertising data using bluetooth-sig interpreters
+        interpreted_data = None
+        interpreter_name = None
+
+        # Prepare data for parsing
+        mfr_data_for_parse: dict[int, bytes] = {}
+        if advertisement.manufacturer_data:
+            for company_id, payload in advertisement.manufacturer_data.items():
+                mfr_data_for_parse[company_id] = payload
+                _LOGGER.debug(
+                    "Device %s has manufacturer data company ID: 0x%04X with %d bytes",
+                    advertisement.address,
+                    company_id,
+                    len(payload),
+                )
+
+        svc_data_for_parse: dict[str, bytes] = {}
+        if advertisement.service_data:
+            for uuid_str, data in advertisement.service_data.items():
+                svc_data_for_parse[uuid_str] = data
+                _LOGGER.debug(
+                    "Device %s has service data UUID: %s with %d bytes",
+                    advertisement.address,
+                    uuid_str,
+                    len(data),
+                )
+
+        # Try to parse with the library's interpreters
+        if mfr_data_for_parse or svc_data_for_parse:
+            try:
+                context = PayloadContext(
+                    mac_address=advertisement.address,
+                    rssi=rssi or 0,
+                )
+                parsed_results = parse_advertising_payloads(
+                    manufacturer_data=mfr_data_for_parse,
+                    service_data=svc_data_for_parse,
+                    context=context,
+                )
+                if parsed_results:
+                    # Use the first parsed result
+                    interpreted_data = parsed_results[0]
+                    interpreter_name = type(interpreted_data).__name__
+                    _LOGGER.debug(
+                        "Parsed advertising data for %s: %s from %s",
+                        advertisement.address,
+                        interpreted_data,
+                        interpreter_name,
+                    )
+            except Exception as e:
+                _LOGGER.debug(
+                    "Failed to parse advertising data for %s: %s",
+                    advertisement.address,
+                    e,
+                )
+
         # Create and return AdvertisementData
         return AdvertisementData(
             ad_structures=ad_structures,
-            interpreted_data=None,
-            interpreter_name=None,
+            interpreted_data=interpreted_data,
+            interpreter_name=interpreter_name,
             rssi=rssi,
         )
 

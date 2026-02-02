@@ -7,7 +7,7 @@ name = "ha-bluetooth-sig"
 version = "0.1.0"
 description = "Home Assistant integration for Bluetooth SIG devices"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "bluetooth-sig @ git+https://github.com/RonanB96/bluetooth-sig-python.git",
 ]
@@ -42,7 +42,7 @@ allow-direct-references = true
 packages = ["bluetooth_sig_devices"]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 line-length = 88
 
 [tool.ruff.lint]
@@ -64,7 +64,7 @@ ignore = [
 known-first-party = ["bluetooth_sig_devices"]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
