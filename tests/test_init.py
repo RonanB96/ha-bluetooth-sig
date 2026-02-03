@@ -41,12 +41,20 @@ async def test_async_setup_entry(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
             new_callable=AsyncMock,
         ) as mock_forward,
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_register_callback",
+            return_value=lambda: None,
+        ),
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_discovered_service_info",
+            return_value=[],
+        ),
     ):
         result = await async_setup_entry(hass, mock_config_entry)
 
         assert result is True
-        assert DOMAIN in hass.data
-        assert mock_config_entry.entry_id in hass.data[DOMAIN]
+        # Check coordinator exists in runtime_data (Bronze requirement)
+        assert mock_config_entry.runtime_data is not None
 
         # Check that sensor platform was forwarded
         mock_forward.assert_called_once()
@@ -68,6 +76,14 @@ async def test_async_unload_entry(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
             new_callable=AsyncMock,
         ),
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_register_callback",
+            return_value=lambda: None,
+        ),
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_discovered_service_info",
+            return_value=[],
+        ),
     ):
         await async_setup_entry(hass, mock_config_entry)
 
@@ -79,7 +95,7 @@ async def test_async_unload_entry(
         result = await async_unload_entry(hass, mock_config_entry)
 
         assert result is True
-        assert mock_config_entry.entry_id not in hass.data.get(DOMAIN, {})
+        # runtime_data is managed by HA, we just verify unload succeeded
 
         # Check that platforms were unloaded
         mock_unload.assert_called_once()
@@ -100,13 +116,20 @@ async def test_async_setup_entry_coordinator_created(
             "homeassistant.config_entries.ConfigEntries.async_forward_entry_setups",
             new_callable=AsyncMock,
         ),
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_register_callback",
+            return_value=lambda: None,
+        ),
+        patch(
+            "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_discovered_service_info",
+            return_value=[],
+        ),
     ):
         await async_setup_entry(hass, mock_config_entry)
 
-        # Check coordinator exists in hass.data
-        assert DOMAIN in hass.data
-        assert mock_config_entry.entry_id in hass.data[DOMAIN]
-        coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+        # Check coordinator exists in runtime_data (Bronze requirement)
+        coordinator = mock_config_entry.runtime_data
+        assert coordinator is not None
 
         # Check it's the right type
         from custom_components.bluetooth_sig_devices.coordinator import (

@@ -11,19 +11,25 @@ from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.gatt_enums import ValueType
 from bluetooth_sig.types.uuid import BluetoothUUID
+from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothChange,
+    BluetoothScanningMode,
     BluetoothServiceInfoBleak,
 )
 from homeassistant.components.bluetooth.passive_update_processor import (
+    PassiveBluetoothDataProcessor,
     PassiveBluetoothDataUpdate,
     PassiveBluetoothEntityKey,
     PassiveBluetoothProcessorCoordinator,
 )
 from homeassistant.components.sensor import SensorEntityDescription, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .device_adapter import HomeAssistantBluetoothAdapter
@@ -32,7 +38,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class BluetoothSIGCoordinator:
-    """Coordinator for managing Bluetooth SIG devices."""
+    """Coordinator for managing Bluetooth SIG devices.
+
+    This coordinator implements continuous auto-discovery of ALL Bluetooth devices.
+    When a device advertises data that the bluetooth-sig-python library can parse,
+    entities are created automatically.
+    """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
@@ -40,20 +51,29 @@ class BluetoothSIGCoordinator:
         self.entry = entry
         self.translator = BluetoothSIGTranslator()
         self.devices: dict[str, Device] = {}
-        self.processors: list[
+        # Per-device processor coordinators keyed by address
+        self._processor_coordinators: dict[
+            str,
             PassiveBluetoothProcessorCoordinator[
                 PassiveBluetoothDataUpdate[float | int | str | bool]
-            ]
-        ] = []
+            ],
+        ] = {}
+        # Callback to unregister global discovery
+        self._cancel_discovery: CALLBACK_TYPE | None = None
+        # Entity adder callback from sensor platform
+        self._async_add_entities: AddEntitiesCallback | None = None
+        # Entity class to use for sensor creation
+        self._entity_class: type | None = None
 
-    def register_processor(
+    def set_entity_adder(
         self,
-        processor: PassiveBluetoothProcessorCoordinator[
-            PassiveBluetoothDataUpdate[float | int | str | bool]
-        ],
+        async_add_entities: AddEntitiesCallback,
+        entity_class: type,
     ) -> None:
-        """Register a processor coordinator."""
-        self.processors.append(processor)
+        """Set the callback for adding entities from sensor platform."""
+        self._async_add_entities = async_add_entities
+        self._entity_class = entity_class
+        _LOGGER.debug("Entity adder registered for sensor platform")
 
     def update_device(
         self, service_info: BluetoothServiceInfoBleak
@@ -139,7 +159,6 @@ class BluetoothSIGCoordinator:
                 name="Signal Strength",
                 native_unit_of_measurement="dBm",
                 state_class=SensorStateClass.MEASUREMENT,
-                entity_registry_enabled_default=False,
             )
             entity_names[rssi_key] = "Signal Strength"
             entity_data[rssi_key] = advertisement.rssi
@@ -432,10 +451,218 @@ class BluetoothSIGCoordinator:
         return None
 
     async def async_start(self) -> None:
-        """Start the coordinator."""
-        _LOGGER.debug("Starting Bluetooth SIG coordinator")
+        """Start the coordinator with continuous Bluetooth discovery.
+
+        Registers a global callback for ALL Bluetooth advertisements.
+        When a new device is seen, creates a PassiveBluetoothProcessorCoordinator
+        for that address to handle ongoing updates.
+        """
+        _LOGGER.debug("Starting Bluetooth SIG coordinator with global discovery")
+
+        # Check Bluetooth scanner count
+        scanner_count = bluetooth.async_scanner_count(self.hass, connectable=False)
+        _LOGGER.info("Bluetooth scanners available: %d", scanner_count)
+
+        # Register callback for ALL Bluetooth devices (connectable and non-connectable)
+        # Using connectable=False matches ALL devices (including connectable ones)
+        # This follows the pattern used by ibeacon and private_ble_device integrations
+        # See: homeassistant/components/ibeacon/coordinator.py
+        # See: homeassistant/components/private_ble_device/coordinator.py
+        self._cancel_discovery = bluetooth.async_register_callback(
+            self.hass,
+            self._async_device_discovered,
+            BluetoothCallbackMatcher(connectable=False),
+            BluetoothScanningMode.PASSIVE,
+        )
+
+        _LOGGER.info("Registered global Bluetooth callback for all devices")
+
+        # Also process any devices already discovered before we registered
+        # Check both connectable and non-connectable devices
+        already_discovered_connectable = list(
+            bluetooth.async_discovered_service_info(self.hass, connectable=True)
+        )
+        already_discovered_nonconnectable = list(
+            bluetooth.async_discovered_service_info(self.hass, connectable=False)
+        )
+        _LOGGER.info(
+            "Already-discovered devices: %d connectable, %d non-connectable",
+            len(already_discovered_connectable),
+            len(already_discovered_nonconnectable),
+        )
+        # Process all discovered devices
+        for service_info in already_discovered_connectable + already_discovered_nonconnectable:
+            self._ensure_device_processor(service_info)
+
+        _LOGGER.info(
+            "Bluetooth SIG coordinator started, tracking %d devices",
+            len(self._processor_coordinators),
+        )
+
+    @callback
+    def _async_device_discovered(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+        change: BluetoothChange,
+    ) -> None:
+        """Handle a Bluetooth device advertisement.
+
+        Called for every advertisement from any Bluetooth device.
+        Creates a processor for new devices to enable entity creation.
+        """
+        _LOGGER.debug(
+            "BLE advertisement: %s (name=%s, rssi=%s, change=%s)",
+            service_info.address,
+            service_info.name,
+            service_info.rssi,
+            change,
+        )
+        self._ensure_device_processor(service_info)
+
+    def _has_supported_data(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+    ) -> bool:
+        """Check if the device advertisement contains data we can parse.
+
+        Returns True if the device has:
+        - Service data matching known GATT characteristic UUIDs, or
+        - Manufacturer data that the bluetooth-sig library can interpret
+        """
+        address = service_info.address
+
+        # Check service data for known GATT characteristics
+        if service_info.service_data:
+            for service_uuid_str in service_info.service_data:
+                # Check if this UUID matches a known characteristic
+                char_info = self.translator.get_characteristic_info_by_uuid(
+                    service_uuid_str
+                )
+                if char_info is not None:
+                    _LOGGER.debug(
+                        "Device %s has supported service data UUID %s",
+                        address,
+                        service_uuid_str,
+                    )
+                    return True
+                else:
+                    _LOGGER.debug(
+                        "Device %s has unknown service data UUID %s",
+                        address,
+                        service_uuid_str,
+                    )
+
+        # Check if manufacturer data can be interpreted
+        if service_info.manufacturer_data:
+            _LOGGER.debug(
+                "Device %s has manufacturer data from IDs: %s",
+                address,
+                list(service_info.manufacturer_data.keys()),
+            )
+            # Convert to library format and check if it has interpreted data
+            try:
+                advertisement = HomeAssistantBluetoothAdapter.convert_advertisement(
+                    service_info
+                )
+                if advertisement.interpreted_data is not None:
+                    _LOGGER.debug(
+                        "Device %s has interpreted manufacturer data: %s",
+                        address,
+                        type(advertisement.interpreted_data).__name__,
+                    )
+                    return True
+                else:
+                    _LOGGER.debug(
+                        "Device %s manufacturer data not interpreted",
+                        address,
+                    )
+            except Exception as e:
+                _LOGGER.debug(
+                    "Device %s failed to parse manufacturer data: %s",
+                    address,
+                    e,
+                )
+        else:
+            _LOGGER.debug(
+                "Device %s has no service_data or manufacturer_data",
+                address,
+            )
+
+        return False
+
+    def _ensure_device_processor(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Ensure a processor coordinator exists for this device address.
+
+        If this is the first time seeing this address and the device has
+        supported data, creates a new PassiveBluetoothProcessorCoordinator
+        and registers entity listeners.
+        """
+        address = service_info.address
+
+        # Skip if we already have a processor for this address
+        if address in self._processor_coordinators:
+            return
+
+        # Skip if sensor platform hasn't registered yet
+        if self._async_add_entities is None or self._entity_class is None:
+            _LOGGER.debug("Skipping device %s - sensor platform not ready yet", address)
+            return
+
+        # Only create processor for devices with data we can parse
+        if not self._has_supported_data(service_info):
+            return
+
+        _LOGGER.debug("Creating processor coordinator for new device %s", address)
+
+        # Create processor coordinator for this specific device address
+        processor_coordinator: PassiveBluetoothProcessorCoordinator[
+            PassiveBluetoothDataUpdate[float | int | str | bool]
+        ] = PassiveBluetoothProcessorCoordinator(
+            self.hass,
+            _LOGGER,
+            address=address,
+            mode=BluetoothScanningMode.PASSIVE,
+            update_method=self.update_device,
+        )
+
+        # Create data processor that passes through the update directly
+        processor: PassiveBluetoothDataProcessor[
+            float | int | str | bool,
+            PassiveBluetoothDataUpdate[float | int | str | bool],
+        ] = PassiveBluetoothDataProcessor(lambda x: x)
+
+        # Register entity listener so new entities are created automatically
+        self.entry.async_on_unload(
+            processor.async_add_entities_listener(
+                self._entity_class, self._async_add_entities
+            )
+        )
+
+        # Register the processor with the coordinator
+        self.entry.async_on_unload(
+            processor_coordinator.async_register_processor(processor)
+        )
+
+        # Start the processor coordinator
+        self.entry.async_on_unload(processor_coordinator.async_start())
+
+        # Store for tracking
+        self._processor_coordinators[address] = processor_coordinator
+
+        _LOGGER.info("Now tracking Bluetooth device %s", address)
 
     async def async_stop(self) -> None:
         """Stop the coordinator."""
         _LOGGER.debug("Stopping Bluetooth SIG coordinator")
+
+        # Cancel discovery callback
+        if self._cancel_discovery is not None:
+            self._cancel_discovery()
+            self._cancel_discovery = None
+
+        # Clear tracked state
+        self._processor_coordinators.clear()
         self.devices.clear()

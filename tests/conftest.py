@@ -191,13 +191,21 @@ def mock_bluetooth_service_info_csc_measurement() -> BluetoothServiceInfoBleak:
         rssi=-65,
         manufacturer_data={},
         service_data={
-            "00002a5b-0000-1000-8000-00805f9b34fb": bytes([
-                0x03,  # flags: wheel + crank data present
-                0x10, 0x00, 0x00, 0x00,  # cumulative wheel revolutions: 16
-                0x20, 0x00,  # last wheel event time: 32
-                0x30, 0x00,  # cumulative crank revolutions: 48
-                0x40, 0x00,  # last crank event time: 64
-            ]),
+            "00002a5b-0000-1000-8000-00805f9b34fb": bytes(
+                [
+                    0x03,  # flags: wheel + crank data present
+                    0x10,
+                    0x00,
+                    0x00,
+                    0x00,  # cumulative wheel revolutions: 16
+                    0x20,
+                    0x00,  # last wheel event time: 32
+                    0x30,
+                    0x00,  # cumulative crank revolutions: 48
+                    0x40,
+                    0x00,  # last crank event time: 64
+                ]
+            ),
         },
         service_uuids=["00002a5b-0000-1000-8000-00805f9b34fb"],
         source="local",
@@ -222,7 +230,9 @@ def mock_bluetooth_service_info_csc_feature() -> BluetoothServiceInfoBleak:
         rssi=-70,
         manufacturer_data={},
         service_data={
-            "00002a5c-0000-1000-8000-00805f9b34fb": bytes([0x07, 0x00]),  # All features supported (bits 0,1,2 set) - 2 bytes
+            "00002a5c-0000-1000-8000-00805f9b34fb": bytes(
+                [0x07, 0x00]
+            ),  # All features supported (bits 0,1,2 set) - 2 bytes
         },
         service_uuids=["00002a5c-0000-1000-8000-00805f9b34fb"],
         source="local",

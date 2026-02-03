@@ -1,15 +1,37 @@
 # Bluetooth SIG Devices for Home Assistant
 
-A Home Assistant custom integration that automatically creates sensors from Bluetooth devices using the [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library.
+A Home Assistant custom integration that automatically creates sensors from Bluetooth devices advertising **standard Bluetooth SIG GATT characteristics** using the [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library.
 
 ## Features
 
-- **Automatic Device Discovery**: Automatically discovers and creates entities for Bluetooth devices advertising data
-- **Dynamic Sensor Creation**: Creates sensors based on advertising data interpretation
-- **Vendor-Specific Support**: Uses bluetooth-sig-python's interpreter registry for vendor-specific data formats (BTHome, Xiaomi, etc.)
-- **Standard GATT Characteristics**: Parses standard Bluetooth SIG GATT characteristics when available
+- **Standard GATT Characteristics**: Parses official Bluetooth SIG GATT characteristics (Battery Level, Temperature, Heart Rate, Humidity, etc.)
+- **Automatic Device Discovery**: Automatically discovers devices advertising standard service data
+- **Dynamic Sensor Creation**: Creates sensors based on the GATT characteristics found in advertisements
 - **Passive Scanning**: Uses Home Assistant's passive Bluetooth scanning for low overhead
 - **No Configuration Required**: Single config entry automatically manages all discovered devices
+
+## What This Integration Does
+
+This integration parses **standard Bluetooth SIG service data** advertised by devices. It uses the official GATT characteristic specifications to interpret data.
+
+### Supported Characteristics
+
+Any device advertising standard GATT service data UUIDs, including:
+
+- **Battery Level** (0x2A19)
+- **Temperature** (0x2A6E)
+- **Humidity** (0x2A6F)
+- **Heart Rate Measurement** (0x2A37)
+- **Blood Pressure** (0x2A35)
+- **Body Sensor Location** (0x2A38)
+- **CSC Measurement** (Cycling Speed and Cadence)
+- And many more standard GATT characteristics
+
+### What This Integration Does NOT Support
+
+- **BTHome** – Use the dedicated [BTHome integration](https://www.home-assistant.io/integrations/bthome/)
+- **Xiaomi sensors** – Use dedicated Xiaomi integrations
+- **Other vendor-specific protocols** – These use proprietary data formats
 
 ## Installation
 
@@ -37,7 +59,20 @@ A Home Assistant custom integration that automatically creates sensors from Blue
 2. Click "Add Integration"
 3. Search for "Bluetooth SIG Devices"
 4. Click to add the integration
-5. The integration will automatically discover and create entities for Bluetooth devices
+5. The integration will automatically discover and create entities for compatible Bluetooth devices
+
+## Removal
+
+To remove the integration:
+
+1. Go to Settings → Devices & Services
+2. Find "Bluetooth SIG Devices" in your integrations list
+3. Click on the integration
+4. Click the three-dot menu (⋮) in the top right
+5. Select "Delete"
+6. Confirm the deletion
+
+This will remove all entities and devices created by this integration.
 
 ## How It Works
 
@@ -46,47 +81,25 @@ A Home Assistant custom integration that automatically creates sensors from Blue
 The integration uses a multi-layered approach:
 
 1. **Device Adapter**: Bridges Home Assistant's `BluetoothServiceInfoBleak` to bluetooth-sig-python's `AdvertisementData` format
-2. **Coordinator**: Manages `Device` instances from bluetooth-sig-python, one per Bluetooth address
+2. **Coordinator**: Manages device instances, one per Bluetooth address
 3. **Sensors**: Dynamically created based on:
-   - Interpreted advertising data (vendor-specific formats like BTHome, Xiaomi, etc.)
-   - Standard GATT service data
+   - Standard GATT service data in advertisements
    - Signal strength (RSSI)
-
-### Supported Devices
-
-The integration supports any Bluetooth device that:
-- Advertises data in standard Bluetooth SIG formats
-- Has vendor-specific advertising interpreters in bluetooth-sig-python
-- Provides standard GATT service data in advertisements
-
-Supported vendor formats include:
-- BTHome
-- Xiaomi (via bluetooth-sig-python interpreters)
-- Any vendor with registered interpreters in the library
 
 ### Entity Creation
 
-Entities are created automatically based on:
+Entities are created automatically when:
 
-1. **Interpreted Data**: If a device's advertising data is recognized by a vendor interpreter, sensors are created for each field in the interpreted data
-2. **Service Data**: Standard GATT characteristics in service data are parsed and create sensors
-3. **RSSI**: Signal strength sensor (disabled by default)
+1. A device advertises service data with a recognised GATT characteristic UUID
+2. The bluetooth-sig-python library can parse the characteristic data
+3. The parsed value is suitable for a sensor entity
 
 ### Example
 
-For a BTHome temperature sensor, the integration might create:
-- `sensor.bthome_device_temperature` - Temperature reading
-- `sensor.bthome_device_humidity` - Humidity reading
-- `sensor.bthome_device_battery` - Battery level
-- `sensor.bthome_device_signal_strength` - RSSI (disabled by default)
-
-## Future Enhancements
-
-- **GATT Polling**: Active connection support for reading GATT characteristics (currently passive only)
-- **Binary Sensors**: Support for binary sensor entities
-- **Events**: Support for button press and other event-based entities
-- **Configuration Options**: Per-device configuration (bind keys, polling intervals, etc.)
-- **Device Customization**: UI for enabling/disabling specific entities per device
+For a heart rate monitor advertising standard GATT data:
+- `sensor.heart_rate_monitor_heart_rate` – Heart rate in BPM
+- `sensor.heart_rate_monitor_body_sensor_location` – Where the sensor is worn
+- `sensor.heart_rate_monitor_battery_level` – Battery percentage
 
 ## Troubleshooting
 
@@ -94,14 +107,14 @@ For a BTHome temperature sensor, the integration might create:
 
 1. Ensure Bluetooth is enabled in Home Assistant
 2. Check that your Bluetooth adapter is working
-3. Verify devices are advertising (check with a Bluetooth scanner app)
+3. Verify devices are advertising **standard GATT service data** (not proprietary formats)
 4. Check Home Assistant logs for errors
 
-### Missing entities
+### Device not creating entities
 
-1. Check if the device's advertising format is supported
+1. The device may use a proprietary protocol (not standard GATT)
 2. Enable debug logging to see what data is being received
-3. Check if RSSI sensor is disabled (it's disabled by default)
+3. Check if the characteristic UUID is supported by bluetooth-sig-python
 
 ### Enable Debug Logging
 
@@ -121,7 +134,7 @@ logger:
 
 - Home Assistant 2024.1.0 or newer
 - bluetooth-sig-python
-- Python 3.14 or newer
+- Python 3.12 or newer
 
 ### Project Structure
 
@@ -133,6 +146,7 @@ custom_components/bluetooth_sig_devices/
 ├── coordinator.py        # Data coordinator
 ├── device_adapter.py     # HA ↔ bluetooth-sig-python adapter
 ├── manifest.json         # Integration manifest
+├── quality_scale.yaml    # Integration quality tracking
 └── sensor.py             # Sensor platform
 ```
 
@@ -152,12 +166,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Credits
 
-- [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) - Core Bluetooth SIG library
-- [Home Assistant](https://www.home-assistant.io/) - Home automation platform
-- Bluetooth SIG - For Bluetooth specifications and standards
+- [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) – Core Bluetooth SIG parsing library
+- [Home Assistant](https://www.home-assistant.io/) – Home automation platform
+- [Bluetooth SIG](https://www.bluetooth.com/) – For Bluetooth specifications and GATT standards
 
 ## Support
 
-- [Issues](https://github.com/RonanB96/ha-bluetooth-sig/issues) - Report bugs or request features
-- [Discussions](https://github.com/RonanB96/ha-bluetooth-sig/discussions) - Ask questions or share ideas
-- [Home Assistant Community](https://community.home-assistant.io/) - General Home Assistant help
+- [Issues](https://github.com/RonanB96/ha-bluetooth-sig/issues) – Report bugs or request features
+- [Discussions](https://github.com/RonanB96/ha-bluetooth-sig/discussions) – Ask questions or share ideas

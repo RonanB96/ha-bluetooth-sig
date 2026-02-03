@@ -5,21 +5,15 @@ from __future__ import annotations
 import logging
 
 from homeassistant import config_entries
-from homeassistant.components.bluetooth import (
-    BluetoothScanningMode,
-    async_discovered_service_info,
-)
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataProcessor,
     PassiveBluetoothDataUpdate,
-    PassiveBluetoothProcessorCoordinator,
     PassiveBluetoothProcessorEntity,
 )
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
 from .coordinator import BluetoothSIGCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,61 +24,18 @@ async def async_setup_entry(
     entry: config_entries.ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Bluetooth SIG sensor platform."""
-    coordinator: BluetoothSIGCoordinator = hass.data[DOMAIN][entry.entry_id]
+    """Set up Bluetooth SIG sensor platform.
 
-    # Get all currently discovered Bluetooth devices
-    discovered_devices = async_discovered_service_info(hass, connectable=False)
+    Registers the entity adder with the coordinator so that new devices
+    discovered via Bluetooth will automatically have sensors created.
+    """
+    coordinator: BluetoothSIGCoordinator = entry.runtime_data
 
-    # Create processors for each discovered device
-    processors_created = set()
+    # Register entity creation callback with coordinator
+    # The coordinator will call async_add_entities when new devices are discovered
+    coordinator.set_entity_adder(async_add_entities, BluetoothSIGSensorEntity)
 
-    for service_info in discovered_devices:
-        address = service_info.address
-
-        if address not in processors_created:
-            # Create a processor coordinator for this device
-            processor_coordinator: PassiveBluetoothProcessorCoordinator[
-                PassiveBluetoothDataUpdate[float | int | str | bool]
-            ] = PassiveBluetoothProcessorCoordinator(
-                hass,
-                _LOGGER,
-                address=address,
-                mode=BluetoothScanningMode.ACTIVE,
-                update_method=coordinator.update_device,
-            )
-
-            # Create processor that passes through the data update
-            processor: PassiveBluetoothDataProcessor[
-                float | int | str | bool,
-                PassiveBluetoothDataUpdate[float | int | str | bool],
-            ] = PassiveBluetoothDataProcessor(lambda x: x)
-
-            # Register entity listener
-            entry.async_on_unload(
-                processor.async_add_entities_listener(
-                    BluetoothSIGSensorEntity, async_add_entities
-                )
-            )
-
-            # Register processor with coordinator
-            entry.async_on_unload(
-                processor_coordinator.async_register_processor(processor)
-            )
-
-            # Start the coordinator (only after all platforms have subscribed)
-            entry.async_on_unload(processor_coordinator.async_start())
-
-            # Store the coordinator
-            coordinator.register_processor(processor_coordinator)
-
-            processors_created.add(address)
-            _LOGGER.debug("Created processor for device %s", address)
-
-    _LOGGER.info(
-        "Bluetooth SIG sensor platform set up with %d devices",
-        len(processors_created),
-    )
+    _LOGGER.info("Bluetooth SIG sensor platform registered for auto-discovery")
 
 
 class BluetoothSIGSensorEntity(
@@ -97,6 +48,8 @@ class BluetoothSIGSensorEntity(
     SensorEntity,
 ):
     """Representation of a Bluetooth SIG sensor."""
+
+    _attr_has_entity_name = True
 
     @property
     def native_value(self) -> float | int | str | bool | None:

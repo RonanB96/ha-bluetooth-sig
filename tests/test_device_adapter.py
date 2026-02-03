@@ -112,7 +112,10 @@ class TestConvertAdvertisement:
         assert result.rssi == -65
         assert result.interpreted_data is not None
         assert isinstance(result.interpreted_data, SIGCharacteristicData)
-        assert result.interpreted_data.characteristic_name == "CSCMeasurementCharacteristic"
+        assert (
+            result.interpreted_data.characteristic_name
+            == "CSCMeasurementCharacteristic"
+        )
 
         # CSC measurement is a complex struct with multiple fields
         parsed = result.interpreted_data.parsed_value
@@ -152,7 +155,8 @@ class TestConvertAdvertisement:
         assert parsed.multiple_sensor_locations_supported is True
 
     def test_convert_body_sensor_location_advertisement(
-        self, mock_bluetooth_service_info_body_sensor_location: BluetoothServiceInfoBleak
+        self,
+        mock_bluetooth_service_info_body_sensor_location: BluetoothServiceInfoBleak,
     ) -> None:
         """Test converting advertisement with Body Sensor Location characteristic (enum)."""
         result = HomeAssistantBluetoothAdapter.convert_advertisement(
@@ -163,7 +167,10 @@ class TestConvertAdvertisement:
         assert result.rssi == -75
         assert result.interpreted_data is not None
         assert isinstance(result.interpreted_data, SIGCharacteristicData)
-        assert result.interpreted_data.characteristic_name == "BodySensorLocationCharacteristic"
+        assert (
+            result.interpreted_data.characteristic_name
+            == "BodySensorLocationCharacteristic"
+        )
 
         # Body sensor location is an enum/int value
         assert result.interpreted_data.parsed_value == 1  # Chest location

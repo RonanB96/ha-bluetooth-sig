@@ -27,19 +27,21 @@ class TestBluetoothSIGCoordinator:
         assert coordinator.hass is mock_hass
         assert coordinator.entry is mock_config_entry
         assert coordinator.devices == {}
-        assert coordinator.processors == []
+        assert coordinator._processor_coordinators == {}
         assert coordinator.translator is not None
 
-    def test_register_processor(
+    def test_set_entity_adder(
         self, mock_hass: MagicMock, mock_config_entry: MagicMock
     ) -> None:
-        """Test registering a processor."""
+        """Test setting the entity adder callback."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        processor = MagicMock()
+        mock_add_entities = MagicMock()
+        mock_entity_class = MagicMock()
 
-        coordinator.register_processor(processor)
+        coordinator.set_entity_adder(mock_add_entities, mock_entity_class)
 
-        assert processor in coordinator.processors
+        assert coordinator._async_add_entities is mock_add_entities
+        assert coordinator._entity_class is mock_entity_class
 
 
 class TestUpdateDevice:
@@ -248,10 +250,7 @@ class TestEntityCreationFromSIGCharacteristicData:
         result = coordinator.update_device(mock_bluetooth_service_info_csc_measurement)
 
         # CSC measurement creates multiple entities from struct fields
-        csc_keys = [
-            k for k in result.entity_data
-            if "2a5b" in str(k.key).lower()
-        ]
+        csc_keys = [k for k in result.entity_data if "2a5b" in str(k.key).lower()]
 
         # Should have multiple entities for different CSC fields
         assert len(csc_keys) >= 4  # wheel revs, wheel time, crank revs, crank time
@@ -274,10 +273,7 @@ class TestEntityCreationFromSIGCharacteristicData:
         result = coordinator.update_device(mock_bluetooth_service_info_csc_feature)
 
         # Find CSC feature entity
-        feature_keys = [
-            k for k in result.entity_data
-            if "2a5c" in str(k.key).lower()
-        ]
+        feature_keys = [k for k in result.entity_data if "2a5c" in str(k.key).lower()]
 
         assert len(feature_keys) >= 1
         # CSC feature creates multiple entities for different aspects
@@ -291,13 +287,12 @@ class TestEntityCreationFromSIGCharacteristicData:
     ) -> None:
         """Test that Body Sensor Location creates entity."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        result = coordinator.update_device(mock_bluetooth_service_info_body_sensor_location)
+        result = coordinator.update_device(
+            mock_bluetooth_service_info_body_sensor_location
+        )
 
         # Find body sensor location entity
-        location_keys = [
-            k for k in result.entity_data
-            if "2a38" in str(k.key).lower()
-        ]
+        location_keys = [k for k in result.entity_data if "2a38" in str(k.key).lower()]
 
         assert len(location_keys) >= 1
         location_key = location_keys[0]
@@ -401,10 +396,7 @@ class TestEdgeCases:
         device_info = result.devices[None]
         # Should use address suffix as name
         device_name = device_info.get("name") or ""
-        assert (
-            "DD:EE:FF" in device_name
-            or "Bluetooth Device" in device_name
-        )
+        assert "DD:EE:FF" in device_name or "Bluetooth Device" in device_name
 
     def test_empty_service_data(
         self,
@@ -433,3 +425,67 @@ class TestEdgeCases:
         # Should still create device and RSSI entity
         assert result.devices is not None
         assert len(result.entity_data) >= 1  # At least RSSI
+
+
+class TestHasSupportedData:
+    """Test cases for _has_supported_data filtering."""
+
+    def test_device_with_known_service_data_is_supported(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Test that device with known GATT service UUID is supported."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        assert coordinator._has_supported_data(mock_bluetooth_service_info_battery)
+
+    def test_device_with_unknown_data_is_not_supported(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test that device with no known data is not supported."""
+        service_info = BluetoothServiceInfoBleak(
+            name="Unknown Device",
+            address="AA:BB:CC:DD:EE:FF",
+            rssi=-75,
+            manufacturer_data={0xFFFF: b"\x01\x02\x03"},  # Unknown manufacturer
+            service_data={
+                "00001234-0000-1000-8000-00805f9b34fb": b"\x00"
+            },  # Unknown UUID
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        assert not coordinator._has_supported_data(service_info)
+
+    def test_device_with_empty_data_is_not_supported(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test that device with no service or manufacturer data is not supported."""
+        service_info = BluetoothServiceInfoBleak(
+            name="Empty Device",
+            address="AA:BB:CC:DD:EE:AA",
+            rssi=-80,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        assert not coordinator._has_supported_data(service_info)

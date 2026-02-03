@@ -48,6 +48,20 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
+    async def async_step_import(
+        self, import_data: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle import from configuration.yaml."""
-        return await self.async_step_user(import_data)
+        # Check if already configured
+        if self._async_current_entries():
+            return self.async_abort(reason="single_instance_allowed")
+
+        # Check if Bluetooth is available
+        if not async_scanner_count(self.hass, connectable=False):
+            return self.async_abort(reason="bluetooth_not_available")
+
+        # Create the config entry directly for YAML import
+        return self.async_create_entry(
+            title="Bluetooth SIG Devices",
+            data={},
+        )
