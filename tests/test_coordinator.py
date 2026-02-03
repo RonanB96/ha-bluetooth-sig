@@ -99,26 +99,23 @@ class TestBuildPassiveBluetoothUpdate:
         assert (DOMAIN, "AA:BB:CC:DD:EE:01") in device_info.get("identifiers", set())
         assert device_info.get("name") == "Test Battery Device"
 
-    def test_creates_rssi_entity(
+    def test_no_rssi_entity_created(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
         mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
     ) -> None:
-        """Test that RSSI entity is created."""
+        """Test that RSSI entity is NOT created (avoids duplicating BLE monitor)."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         result = coordinator.update_device(mock_bluetooth_service_info_battery)
 
-        # Find RSSI key
+        # RSSI should NOT be created - this is generic BLE data that BLE monitor handles
         rssi_keys = [k for k in result.entity_data if k.key == "rssi"]
-        assert len(rssi_keys) == 1
+        assert len(rssi_keys) == 0
 
-        rssi_key = rssi_keys[0]
-        assert result.entity_data[rssi_key] == -65
-        assert result.entity_names[rssi_key] == "Signal Strength"
-
-        description = result.entity_descriptions[rssi_key]
-        assert description.native_unit_of_measurement == "dBm"
+        # But the device should still have SIG characteristic entities (Battery Level)
+        battery_keys = [k for k in result.entity_data if "2a19" in str(k.key).lower()]
+        assert len(battery_keys) >= 1
 
 
 class TestEntityCreationFromSIGCharacteristicData:
@@ -298,20 +295,24 @@ class TestEntityCreationFromSIGCharacteristicData:
         location_key = location_keys[0]
         assert result.entity_data[location_key] == 1  # Chest location
 
-    def test_rssi_only_device_creates_only_rssi(
+    def test_rssi_only_device_creates_no_entities(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
         mock_bluetooth_service_info_rssi_only: BluetoothServiceInfoBleak,
     ) -> None:
-        """Test that device with no parseable data only gets RSSI entity."""
+        """Test that device with no parseable SIG data creates NO entities.
+
+        This integration only creates entities for devices that expose
+        standard Bluetooth SIG GATT characteristics. Generic RSSI data
+        is handled by dedicated BLE monitor integrations.
+        """
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         result = coordinator.update_device(mock_bluetooth_service_info_rssi_only)
 
-        # Should only have RSSI entity
-        # Either no extra entities, or only manufacturer-specific ones (not SIG characteristics)
-        # No assertions about specific count since proprietary data handling may vary
-        assert "rssi" in [k.key for k in result.entity_data]
+        # Should NOT create any entities for devices without SIG characteristic data
+        # RSSI-only devices are handled by BLE monitor integrations
+        assert len(result.entity_data) == 0
 
 
 class TestCharacteristicRegistry:
@@ -422,9 +423,11 @@ class TestEdgeCases:
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         result = coordinator.update_device(service_info)
 
-        # Should still create device and RSSI entity
+        # Device info should still be created for tracking
         assert result.devices is not None
-        assert len(result.entity_data) >= 1  # At least RSSI
+        # But NO entities should be created without SIG characteristic data
+        # (RSSI-only devices are handled by BLE monitor integrations)
+        assert len(result.entity_data) == 0
 
 
 class TestHasSupportedData:
@@ -489,3 +492,101 @@ class TestHasSupportedData:
 
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         assert not coordinator._has_supported_data(service_info)
+
+
+class TestGATTProbeResult:
+    """Test cases for GATTProbeResult dataclass."""
+
+    def test_gatt_probe_result_has_support(self) -> None:
+        """Test GATTProbeResult.has_support method."""
+        from custom_components.bluetooth_sig_devices.device_validator import (
+            GATTProbeResult,
+        )
+
+        # No parseable characteristics
+        result_empty = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+            parseable_count=0,
+        )
+        assert result_empty.has_support() is False
+
+        # Has parseable characteristics
+        result_with_chars = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+            parseable_count=3,
+        )
+        assert result_with_chars.has_support() is True
+
+
+class TestCoordinatorGATTMethods:
+    """Test cases for coordinator GATT-related methods."""
+
+    def test_coordinator_has_gatt_probe_cache(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test coordinator initializes with GATT probe cache."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        assert hasattr(coordinator, "_gatt_probe_results")
+        assert coordinator._gatt_probe_results == {}
+        assert hasattr(coordinator, "_probe_failures")
+        assert coordinator._probe_failures == {}
+
+    def test_has_supported_data_checks_gatt_results(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test _has_supported_data checks GATT probe results."""
+        from custom_components.bluetooth_sig_devices.device_validator import (
+            GATTProbeResult,
+        )
+
+        service_info = BluetoothServiceInfoBleak(
+            name="GATT Device",
+            address="AA:BB:CC:DD:EE:FF",
+            rssi=-70,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        # Without GATT results, should not be supported
+        assert not coordinator._has_supported_data(service_info)
+
+        # Add GATT probe result with parseable chars
+        coordinator._gatt_probe_results["AA:BB:CC:DD:EE:FF"] = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="GATT Device",
+            parseable_count=2,
+        )
+
+        # Now should be supported
+        assert coordinator._has_supported_data(service_info)
+
+    def test_coordinator_has_validator(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test coordinator has device validator."""
+        from custom_components.bluetooth_sig_devices.device_validator import (
+            DeviceValidator,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        assert hasattr(coordinator, "validator")
+        assert isinstance(coordinator.validator, DeviceValidator)

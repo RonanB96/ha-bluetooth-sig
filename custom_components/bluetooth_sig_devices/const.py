@@ -1,11 +1,44 @@
 """Constants for the Bluetooth SIG Devices integration."""
 
+from datetime import timedelta
+
 DOMAIN = "bluetooth_sig_devices"
 
-# Configuration (reserved for future use)
+# Configuration keys
 CONF_BINDKEY = "bindkey"
+CONF_CUSTOM_DEVICES = "custom_devices"
+CONF_DEVICE_ADDRESS = "address"
+CONF_DEVICE_NAME = "name"
+CONF_POLL_INTERVAL = "poll_interval"
+CONF_FORCE_PROBE = "force_probe"
 
-# Attributes (reserved for future use)
+# Attributes
 ATTR_MANUFACTURER = "manufacturer"
 ATTR_MODEL = "model"
 ATTR_SIGNAL_STRENGTH = "rssi"
+
+# GATT connection defaults
+DEFAULT_POLL_INTERVAL = timedelta(minutes=5)
+MIN_POLL_INTERVAL_SECONDS = 30
+MAX_POLL_INTERVAL_SECONDS = 86400  # 24 hours
+DEFAULT_CONNECTION_TIMEOUT = 10.0
+DEFAULT_READ_TIMEOUT = 5.0
+
+# Probe configuration
+MAX_PROBE_FAILURES = 3
+MAX_CONCURRENT_PROBES = 2
+PROBE_FAILURE_BACKOFF_MINUTES = [5, 30, 120]  # Backoff after each failure
+
+# Services that should NOT count as "parseable SIG data"
+# These are standard BLE services that any BLE monitor can expose
+# The actual UUIDs are retrieved from the bluetooth-sig library at runtime
+EXCLUDED_SERVICE_NAMES: frozenset[str] = frozenset(
+    {
+        "GAP",  # Generic Access Profile - basic device identity
+        "GATT",  # Generic Attribute Profile - protocol infrastructure
+    }
+)
+
+# Entity key prefixes
+ENTITY_KEY_PREFIX_GATT = "gatt_"
+ENTITY_KEY_PREFIX_ADVERT = "adv_"

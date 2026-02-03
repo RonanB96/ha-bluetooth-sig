@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 
 from bluetooth_sig.advertising import SIGCharacteristicData
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.gatt.services.registry import GattServiceRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.gatt_enums import ValueType
 from bluetooth_sig.types.uuid import BluetoothUUID
@@ -31,8 +34,9 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, EXCLUDED_SERVICE_NAMES, MAX_PROBE_FAILURES
 from .device_adapter import HomeAssistantBluetoothAdapter
+from .device_validator import DeviceValidator, GATTProbeResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +47,9 @@ class BluetoothSIGCoordinator:
     This coordinator implements continuous auto-discovery of ALL Bluetooth devices.
     When a device advertises data that the bluetooth-sig-python library can parse,
     entities are created automatically.
+
+    For connectable devices, this coordinator can also probe GATT services to
+    discover characteristics that can be parsed by the library.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -51,6 +58,11 @@ class BluetoothSIGCoordinator:
         self.entry = entry
         self.translator = BluetoothSIGTranslator()
         self.devices: dict[str, Device] = {}
+        self.validator = DeviceValidator(self.translator)
+        # Build excluded service/characteristic UUIDs from the library
+        self._excluded_service_uuids, self._excluded_char_uuids = (
+            self._build_excluded_uuids()
+        )
         # Per-device processor coordinators keyed by address
         self._processor_coordinators: dict[
             str,
@@ -64,6 +76,45 @@ class BluetoothSIGCoordinator:
         self._async_add_entities: AddEntitiesCallback | None = None
         # Entity class to use for sensor creation
         self._entity_class: type | None = None
+        # GATT probe results cache
+        self._gatt_probe_results: dict[str, GATTProbeResult] = {}
+        # Addresses that failed probing (to avoid repeated attempts)
+        self._probe_failures: dict[str, int] = {}
+        # Addresses currently being probed (to avoid duplicate probe attempts)
+        self._pending_probes: set[str] = set()
+        # Semaphore to limit concurrent GATT probes (BLE adapter has limited slots)
+        self._probe_semaphore = asyncio.Semaphore(2)
+
+    @staticmethod
+    def _build_excluded_uuids() -> tuple[frozenset[str], frozenset[str]]:
+        """Build sets of excluded service and characteristic UUIDs from the library.
+
+        Uses the bluetooth-sig library's GattServiceRegistry to identify
+        services that should be excluded (GAP, GATT) and their characteristics.
+
+        Returns:
+            Tuple of (excluded_service_uuids, excluded_char_uuids) as frozensets
+            of short-form UUIDs (e.g., '1800', '2A00')
+        """
+        excluded_service_uuids: set[str] = set()
+        excluded_char_uuids: set[str] = set()
+
+        for svc_class in GattServiceRegistry.get_all_services():
+            svc = svc_class()
+            if svc.name in EXCLUDED_SERVICE_NAMES:
+                excluded_service_uuids.add(svc.uuid.short_form.upper())
+                # Add all expected characteristics from this service
+                for char_uuid in svc.get_expected_characteristic_uuids():
+                    excluded_char_uuids.add(
+                        BluetoothUUID(str(char_uuid)).short_form.upper()
+                    )
+
+        _LOGGER.debug(
+            "Excluded services: %s, excluded characteristics: %s",
+            excluded_service_uuids,
+            excluded_char_uuids,
+        )
+        return frozenset(excluded_service_uuids), frozenset(excluded_char_uuids)
 
     def set_entity_adder(
         self,
@@ -74,6 +125,328 @@ class BluetoothSIGCoordinator:
         self._async_add_entities = async_add_entities
         self._entity_class = entity_class
         _LOGGER.debug("Entity adder registered for sensor platform")
+
+    async def async_probe_device(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+    ) -> GATTProbeResult | None:
+        """Probe a connectable device to discover its GATT characteristics.
+
+        Uses the library's Device class to connect, discover services,
+        and identify which characteristics we can parse.
+
+        Args:
+            service_info: Bluetooth service info for the device
+
+        Returns:
+            GATTProbeResult if successful, None if probe failed
+
+        """
+        address = service_info.address
+
+        # Check if we've already probed this device
+        if address in self._gatt_probe_results:
+            return self._gatt_probe_results[address]
+
+        # Check if we've hit the failure limit
+        if self._probe_failures.get(address, 0) >= MAX_PROBE_FAILURES:
+            _LOGGER.debug(
+                "Skipping probe for %s - exceeded failure limit",
+                address,
+            )
+            return None
+
+        _LOGGER.debug("Probing device %s for GATT capabilities", address)
+
+        # Get or create device instance with GATT support
+        if address not in self.devices:
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, address, connectable=True
+            )
+            adapter = HomeAssistantBluetoothAdapter(
+                address,
+                service_info.name or "",
+                hass=self.hass,
+                ble_device=ble_device,
+            )
+            self.devices[address] = Device(
+                connection_manager=adapter,
+                translator=self.translator,
+            )
+
+        device = self.devices[address]
+
+        try:
+            # Connect and discover services using library's Device class
+            await device.connect()
+            services = await device.connected.discover_services()
+
+            # Count parseable characteristics
+            supported_uuids: list[BluetoothUUID] = []
+            parseable_count = 0
+
+            for service in services:
+                # Skip excluded services (GAP, GATT) entirely
+                service_uuid = BluetoothUUID(service.uuid)
+                if service_uuid.short_form.upper() in self._excluded_service_uuids:
+                    _LOGGER.debug(
+                        "Device %s: skipping excluded service %s",
+                        address,
+                        service_uuid.short_form,
+                    )
+                    continue
+
+                for char_uuid_str, char_instance in service.characteristics.items():
+                    # If we have a characteristic instance from the registry,
+                    # it means we can parse it
+                    char_uuid = BluetoothUUID(char_uuid_str)
+
+                    # Skip excluded characteristics (from GAP/GATT services)
+                    if char_uuid.short_form.upper() in self._excluded_char_uuids:
+                        _LOGGER.debug(
+                            "Device %s: skipping excluded characteristic %s",
+                            address,
+                            char_uuid.short_form,
+                        )
+                        continue
+
+                    char_class = (
+                        CharacteristicRegistry.get_characteristic_class_by_uuid(
+                            char_uuid
+                        )
+                    )
+                    if char_class is not None:
+                        supported_uuids.append(char_uuid)
+                        parseable_count += 1
+                        _LOGGER.debug(
+                            "Device %s has parseable SIG characteristic: %s",
+                            address,
+                            char_instance.name
+                            if hasattr(char_instance, "name")
+                            else char_uuid.short_form,
+                        )
+
+            result = GATTProbeResult(
+                address=address,
+                name=service_info.name,
+                parseable_count=parseable_count,
+                supported_char_uuids=supported_uuids,
+            )
+
+            self._gatt_probe_results[address] = result
+
+            if parseable_count > 0:
+                _LOGGER.info(
+                    "Device %s has %d parseable GATT characteristics",
+                    address,
+                    parseable_count,
+                )
+            else:
+                _LOGGER.debug(
+                    "Device %s has no parseable GATT characteristics",
+                    address,
+                )
+
+            return result
+
+        except Exception as err:
+            self._probe_failures[address] = self._probe_failures.get(address, 0) + 1
+            _LOGGER.debug(
+                "Failed to probe device %s (attempt %d/%d): %s",
+                address,
+                self._probe_failures[address],
+                MAX_PROBE_FAILURES,
+                err,
+            )
+            return None
+
+        finally:
+            # Always disconnect after probing
+            with contextlib.suppress(Exception):
+                await device.disconnect()
+
+    async def _async_probe_and_setup(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Probe a connectable device and set up processor if successful.
+
+        This is called as a background task for connectable devices that
+        don't have interpretable advertisement data. Uses a semaphore to
+        limit concurrent probes since the BLE adapter has limited slots.
+
+        Args:
+            service_info: Bluetooth service info for the device
+
+        """
+        address = service_info.address
+
+        # Wait for available probe slot (limits concurrent connections)
+        async with self._probe_semaphore:
+            _LOGGER.info(
+                "Starting GATT probe for connectable device %s (%s)",
+                address,
+                service_info.name or "unknown",
+            )
+
+            try:
+                result = await self.async_probe_device(service_info)
+
+                if result and result.has_support():
+                    _LOGGER.info(
+                        "GATT probe successful for %s: %d parseable characteristics",
+                        address,
+                        result.parseable_count,
+                    )
+                    # Re-check and create processor now that we have probe results
+                    # The _has_supported_data check will now find the probe results
+                    self._ensure_device_processor(service_info)
+                else:
+                    _LOGGER.debug(
+                        "GATT probe for %s found no parseable characteristics",
+                        address,
+                    )
+            except Exception as err:
+                _LOGGER.debug(
+                    "GATT probe failed for %s: %s",
+                    address,
+                    err,
+                )
+            finally:
+                self._pending_probes.discard(address)
+
+            # Brief delay between probes to let BLE adapter recover
+            await asyncio.sleep(0.5)
+
+    async def async_poll_gatt_characteristics(
+        self,
+        address: str,
+    ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
+        """Poll GATT characteristics from a connectable device.
+
+        Connects to the device, reads all known parseable characteristics,
+        and returns a PassiveBluetoothDataUpdate with the data.
+
+        This method uses the library's Device.read() method which handles
+        parsing automatically.
+
+        Args:
+            address: Device bluetooth address
+
+        Returns:
+            PassiveBluetoothDataUpdate with entity data, or None if failed
+
+        """
+        # Check if we have probe results
+        probe_result = self._gatt_probe_results.get(address)
+        if not probe_result or not probe_result.has_support():
+            _LOGGER.debug("No GATT support for device %s", address)
+            return None
+
+        device = self.devices.get(address)
+        if not device:
+            _LOGGER.debug("No device instance for %s", address)
+            return None
+
+        try:
+            await device.connect()
+
+            device_id = address.replace(":", "").lower()
+            devices: dict[str | None, DeviceInfo] = {}
+            entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription] = {}
+            entity_names: dict[PassiveBluetoothEntityKey, str | None] = {}
+            entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool] = {}
+
+            devices[None] = DeviceInfo(
+                identifiers={(DOMAIN, address)},
+                name=probe_result.name or f"Bluetooth Device {address[-8:]}",
+                connections={("bluetooth", address)},
+            )
+
+            # Read each supported characteristic using the library's Device.read()
+            for char_uuid in probe_result.supported_char_uuids:
+                try:
+                    # Use the library's read method - it handles parsing
+                    parsed_value = await device.read(str(char_uuid))
+
+                    if parsed_value is None:
+                        continue
+
+                    # Get characteristic info for entity metadata
+                    char_class = (
+                        CharacteristicRegistry.get_characteristic_class_by_uuid(
+                            char_uuid
+                        )
+                    )
+                    if not char_class:
+                        continue
+
+                    char_instance = char_class()
+                    char_name = char_instance.name
+                    char_unit = char_instance.unit
+
+                    # Create entity key
+                    entity_key = PassiveBluetoothEntityKey(
+                        f"gatt_{char_uuid.short_form}",
+                        device_id,
+                    )
+
+                    # Handle the parsed value - could be simple or struct
+                    if isinstance(parsed_value, (int, float, str, bool)):
+                        entity_descriptions[entity_key] = SensorEntityDescription(
+                            key=f"gatt_{char_uuid.short_form}",
+                            name=char_name,
+                            native_unit_of_measurement=char_unit,
+                            state_class=self._determine_state_class(
+                                char_name, parsed_value
+                            ),
+                        )
+                        entity_names[entity_key] = char_name
+                        entity_data[entity_key] = parsed_value
+                        _LOGGER.debug(
+                            "Read GATT %s from %s: %s",
+                            char_name,
+                            address,
+                            parsed_value,
+                        )
+                    elif hasattr(parsed_value, "__struct_fields__"):
+                        # It's a struct - extract individual fields
+                        self._add_struct_entities(
+                            device_id,
+                            f"gatt_{char_uuid.short_form}",
+                            char_name,
+                            parsed_value,
+                            char_unit,
+                            entity_descriptions,
+                            entity_names,
+                            entity_data,
+                        )
+
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Failed to read characteristic %s from %s: %s",
+                        char_uuid.short_form,
+                        address,
+                        err,
+                    )
+
+            if not entity_data:
+                return None
+
+            return PassiveBluetoothDataUpdate(
+                devices=devices,
+                entity_descriptions=entity_descriptions,
+                entity_names=entity_names,
+                entity_data=entity_data,
+            )
+
+        except Exception as err:
+            _LOGGER.debug("Failed to poll GATT from %s: %s", address, err)
+            return None
+
+        finally:
+            with contextlib.suppress(Exception):
+                await device.disconnect()
 
     def update_device(
         self, service_info: BluetoothServiceInfoBleak
@@ -101,7 +474,16 @@ class BluetoothSIGCoordinator:
 
         # Get or create device instance
         if address not in self.devices:
-            adapter = HomeAssistantBluetoothAdapter(address, service_info.name)
+            # Get connectable BLE device if available
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, address, connectable=True
+            )
+            adapter = HomeAssistantBluetoothAdapter(
+                address,
+                service_info.name or "",
+                hass=self.hass,
+                ble_device=ble_device,
+            )
             self.devices[address] = Device(
                 connection_manager=adapter,
                 translator=self.translator,
@@ -151,17 +533,10 @@ class BluetoothSIGCoordinator:
             model=self._get_model_name(advertisement),
         )
 
-        # Add RSSI sensor
-        if advertisement.rssi is not None:
-            rssi_key = PassiveBluetoothEntityKey("rssi", device_id)
-            entity_descriptions[rssi_key] = SensorEntityDescription(
-                key="rssi",
-                name="Signal Strength",
-                native_unit_of_measurement="dBm",
-                state_class=SensorStateClass.MEASUREMENT,
-            )
-            entity_names[rssi_key] = "Signal Strength"
-            entity_data[rssi_key] = advertisement.rssi
+        # NOTE: We intentionally do NOT add an RSSI-only sensor here.
+        # RSSI is generic BLE data that any BLE monitor can expose.
+        # This integration only creates entities for real SIG data
+        # (interpreted manufacturer data, GATT characteristic values).
 
         # Process interpreted data if available
         if advertisement.interpreted_data:
@@ -268,7 +643,11 @@ class BluetoothSIGCoordinator:
         value_type = char_instance.value_type
         parsed_value = data.parsed_value
 
-        uuid_obj = BluetoothUUID(data.uuid)
+        uuid_obj = (
+            data.uuid
+            if isinstance(data.uuid, BluetoothUUID)
+            else BluetoothUUID(data.uuid)
+        )
 
         _LOGGER.debug(
             "Processing %s (uuid=%s, value_type=%s, unit=%s) for device %s",
@@ -491,7 +870,9 @@ class BluetoothSIGCoordinator:
             len(already_discovered_nonconnectable),
         )
         # Process all discovered devices
-        for service_info in already_discovered_connectable + already_discovered_nonconnectable:
+        for service_info in (
+            already_discovered_connectable + already_discovered_nonconnectable
+        ):
             self._ensure_device_processor(service_info)
 
         _LOGGER.info(
@@ -588,6 +969,17 @@ class BluetoothSIGCoordinator:
                 address,
             )
 
+        # Check if we have GATT probe results for this device
+        if address in self._gatt_probe_results:
+            probe_result = self._gatt_probe_results[address]
+            if probe_result.has_support():
+                _LOGGER.debug(
+                    "Device %s has %d parseable GATT characteristics",
+                    address,
+                    probe_result.parseable_count,
+                )
+                return True
+
         return False
 
     def _ensure_device_processor(
@@ -599,6 +991,9 @@ class BluetoothSIGCoordinator:
         If this is the first time seeing this address and the device has
         supported data, creates a new PassiveBluetoothProcessorCoordinator
         and registers entity listeners.
+
+        For connectable devices without interpretable advertisement data,
+        schedules a GATT probe to discover parseable characteristics.
         """
         address = service_info.address
 
@@ -611,8 +1006,23 @@ class BluetoothSIGCoordinator:
             _LOGGER.debug("Skipping device %s - sensor platform not ready yet", address)
             return
 
-        # Only create processor for devices with data we can parse
-        if not self._has_supported_data(service_info):
+        # Check if we have supported data from advertisement
+        has_advert_data = self._has_supported_data(service_info)
+
+        # If no advertisement data is interpretable, try GATT probing for connectable devices
+        if not has_advert_data:
+            # Schedule GATT probe for connectable devices we haven't probed yet
+            if (
+                service_info.connectable
+                and address not in self._gatt_probe_results
+                and address not in self._pending_probes
+                and self._probe_failures.get(address, 0) < MAX_PROBE_FAILURES
+            ):
+                self._pending_probes.add(address)
+                self.hass.async_create_task(
+                    self._async_probe_and_setup(service_info),
+                    f"bluetooth_sig_probe_{address}",
+                )
             return
 
         _LOGGER.debug("Creating processor coordinator for new device %s", address)

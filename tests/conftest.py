@@ -49,6 +49,10 @@ def mock_bluetooth_setup() -> Generator[None]:
             "homeassistant.components.bluetooth.async_scanner_count",
             return_value=1,
         ),
+        patch(
+            "homeassistant.components.bluetooth.async_ble_device_from_address",
+            return_value=None,
+        ),
     ):
         yield
 

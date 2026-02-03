@@ -260,24 +260,85 @@ class TestHomeAssistantBluetoothAdapter:
 
         assert len(received_advertisements) == 1  # Still 1, not 2
 
-    def test_connection_methods_raise_not_implemented(self) -> None:
-        """Test that connection methods raise NotImplementedError."""
+    def test_connection_methods_require_hass(self) -> None:
+        """Test that connection methods require hass parameter."""
+        import asyncio
+
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
         adapter = HomeAssistantBluetoothAdapter(
             address="AA:BB:CC:DD:EE:FF",
             name="Test Device",
         )
 
-        with pytest.raises(NotImplementedError):
-            import asyncio
-
+        # Without hass parameter, connect should raise RuntimeError
+        with pytest.raises(
+            RuntimeError, match="GATT operations require hass parameter"
+        ):
             asyncio.get_event_loop().run_until_complete(adapter.connect())
 
-        with pytest.raises(NotImplementedError):
-            import asyncio
-
-            asyncio.get_event_loop().run_until_complete(adapter.disconnect())
-
-        with pytest.raises(NotImplementedError):
-            import asyncio
-
+        # get_services requires connection, should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Not connected to device"):
             asyncio.get_event_loop().run_until_complete(adapter.get_services())
+
+        # read_gatt_char requires connection, should raise RuntimeError
+        with pytest.raises(RuntimeError, match="Not connected to device"):
+            asyncio.get_event_loop().run_until_complete(
+                adapter.read_gatt_char(BluetoothUUID("2A19"))
+            )
+
+    def test_adapter_has_connection_support_property(self) -> None:
+        """Test has_connection_support property."""
+        from unittest.mock import MagicMock
+
+        # Without hass, should not have connection support
+        adapter_no_hass = HomeAssistantBluetoothAdapter(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+        )
+        assert adapter_no_hass.has_connection_support is False
+
+        # With hass, should have connection support
+        mock_hass = MagicMock()
+        adapter_with_hass = HomeAssistantBluetoothAdapter(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+            hass=mock_hass,
+        )
+        assert adapter_with_hass.has_connection_support is True
+
+    def test_adapter_update_ble_device(self) -> None:
+        """Test update_ble_device method."""
+        from unittest.mock import MagicMock
+
+        adapter = HomeAssistantBluetoothAdapter(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+        )
+
+        assert adapter._ble_device is None
+
+        mock_ble_device = MagicMock()
+        adapter.update_ble_device(mock_ble_device)
+
+        assert adapter._ble_device is mock_ble_device
+
+    def test_adapter_is_connected_property(self) -> None:
+        """Test is_connected property reflects actual state."""
+        adapter = HomeAssistantBluetoothAdapter(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+        )
+
+        # Without client, should not be connected
+        assert adapter.is_connected is False
+
+    def test_adapter_mtu_size_default(self) -> None:
+        """Test default MTU size."""
+        adapter = HomeAssistantBluetoothAdapter(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test Device",
+        )
+
+        # Default MTU size should be 23
+        assert adapter.mtu_size == 23
