@@ -82,9 +82,9 @@ The integration uses a multi-layered approach:
 
 1. **Device Adapter**: Bridges Home Assistant's `BluetoothServiceInfoBleak` to bluetooth-sig-python's `AdvertisementData` format
 2. **Coordinator**: Manages device instances, one per Bluetooth address
-3. **Sensors**: Dynamically created based on:
-   - Standard GATT service data in advertisements
-   - Signal strength (RSSI)
+3. **Sensors**: Dynamically created based on standard GATT service data in advertisements
+
+> **Note**: RSSI sensors are not created by this integration to avoid duplication with other BLE monitor integrations.
 
 ### Entity Creation
 
@@ -132,7 +132,7 @@ logger:
 
 ### Requirements
 
-- Home Assistant 2024.1.0 or newer
+- Home Assistant 2026.1.0 or newer
 - bluetooth-sig-python
 - Python 3.12 or newer
 

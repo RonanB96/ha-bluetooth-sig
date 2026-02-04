@@ -50,11 +50,9 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
-_LOGGER = logging.getLogger(__name__)
+from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
 
-# Connection timeouts
-DEFAULT_CONNECTION_TIMEOUT = 30.0
-DEFAULT_READ_TIMEOUT = 10.0
+_LOGGER = logging.getLogger(__name__)
 
 
 class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
