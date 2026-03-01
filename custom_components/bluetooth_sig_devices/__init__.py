@@ -11,7 +11,7 @@ from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN
+from .const import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL, DOMAIN
 from .coordinator import BluetoothSIGCoordinator
 
 type BluetoothSIGConfigEntry = ConfigEntry[BluetoothSIGCoordinator]
@@ -42,13 +42,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         raise ConfigEntryNotReady("No Bluetooth scanner available")
 
     # Create global coordinator for managing all devices
-    coordinator = BluetoothSIGCoordinator(hass, entry)
+    poll_seconds = entry.options.get(
+        CONF_POLL_INTERVAL, int(DEFAULT_POLL_INTERVAL.total_seconds())
+    )
+    coordinator = BluetoothSIGCoordinator(hass, entry, poll_interval=poll_seconds)
 
     # Store coordinator in runtime_data (Bronze requirement)
     entry.runtime_data = coordinator
 
     # Forward setup to platforms first
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Reload integration when options change (e.g. poll_interval)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     # Start coordinator after Home Assistant is fully started
     # This ensures Bluetooth discovery has had time to populate
@@ -80,3 +86,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await entry.runtime_data.async_stop()
 
     return unload_ok
+
+
+async def _async_options_updated(
+    hass: HomeAssistant, entry: BluetoothSIGConfigEntry
+) -> None:
+    """Reload the integration when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)

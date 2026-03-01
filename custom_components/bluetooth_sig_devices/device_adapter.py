@@ -1,7 +1,7 @@
 """Device adapter for Home Assistant Bluetooth.
 
 This module provides the HomeAssistantBluetoothAdapter class which implements
-the bluetooth-sig-python ConnectionManagerProtocol. It bridges Home Assistant's
+the bluetooth-sig-python ClientManagerProtocol. It bridges Home Assistant's
 Bluetooth integration with the bluetooth-sig-python library for both:
 - Passive mode: parsing advertisement data
 - Active mode: GATT connections for reading characteristics
@@ -23,7 +23,7 @@ from bleak_retry_connector import (
     establish_connection,
 )
 from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
-from bluetooth_sig.device.connection import ConnectionManagerProtocol
+from bluetooth_sig.device.client import ClientManagerProtocol
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
@@ -48,6 +48,14 @@ from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+
+# Bleak returns characteristic properties as lowercase hyphenated strings
+# (e.g. "write-without-response"), but GattProperty is an IntEnum with
+# bitmask values.  Build the mapping once from the enum member names.
+_BLEAK_PROP_TO_GATT: dict[str, GattProperty] = {
+    member.name.lower().replace("_", "-"): member
+    for member in GattProperty
+}
 from homeassistant.core import HomeAssistant
 
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
@@ -55,10 +63,10 @@ from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
 _LOGGER = logging.getLogger(__name__)
 
 
-class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
+class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     """Adapter for Home Assistant Bluetooth to bluetooth-sig-python.
 
-    This adapter implements the full ConnectionManagerProtocol, supporting both:
+    This adapter implements the full ClientManagerProtocol, supporting both:
     - Passive mode: Advertisement parsing only (no hass/ble_device needed)
     - Active mode: Full GATT connection support (requires hass and ble_device)
 
@@ -249,9 +257,10 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
                 channel_map_update_indication=b"",
             ),
             mesh=MeshAndBroadcastData(
-                mesh_message=b"",
-                mesh_beacon=b"",
-                pb_adv=b"",
+                mesh_message=None,
+                secure_network_beacon=None,
+                unprovisioned_device_beacon=None,
+                provisioning_bearer=None,
                 broadcast_name="",
                 broadcast_code=b"",
                 biginfo=b"",
@@ -394,7 +403,7 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
             self._advertisement_callbacks.remove(callback)
 
     # =========================================================================
-    # GATT Connection Methods (ConnectionManagerProtocol implementation)
+    # GATT Connection Methods (ClientManagerProtocol implementation)
     # =========================================================================
 
     def _ensure_connection_support(self) -> None:
@@ -462,7 +471,8 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
                 ble_device,
                 self._address,
                 disconnected_callback=self._on_disconnect,
-                max_attempts=3,
+                max_attempts=2,
+                ble_device_callback=self._get_ble_device,
             )
             self._is_connected = True
             self._mtu_size = self._client.mtu_size
@@ -540,10 +550,11 @@ class HomeAssistantBluetoothAdapter(ConnectionManagerProtocol):
                 # Convert Bleak properties to GattProperty enum
                 properties: list[GattProperty] = []
                 for prop in bleak_char.properties:
-                    try:
-                        properties.append(GattProperty(prop))
-                    except ValueError:
-                        _LOGGER.warning("Unknown GattProperty from Bleak: %s", prop)
+                    gatt_prop = _BLEAK_PROP_TO_GATT.get(prop)
+                    if gatt_prop is not None:
+                        properties.append(gatt_prop)
+                    else:
+                        _LOGGER.warning("Unmapped Bleak property: %s", prop)
 
                 # Get characteristic class from registry
                 char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(

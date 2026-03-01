@@ -12,5 +12,19 @@
       "single_instance_allowed": "Only a single instance of Bluetooth SIG Devices is allowed.",
       "bluetooth_not_available": "Bluetooth is not available on this system."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Bluetooth SIG Devices Options",
+        "description": "Configure how often connectable devices are polled for GATT characteristic data.",
+        "data": {
+          "poll_interval": "Poll interval (seconds)"
+        },
+        "data_description": {
+          "poll_interval": "How often to read GATT characteristics from connectable devices. Range: 30–86400 seconds."
+        }
+      }
+    }
   }
 }

@@ -4,7 +4,8 @@ from datetime import timedelta
 
 DOMAIN = "bluetooth_sig_devices"
 
-# Configuration keys
+# Configuration keys (CONF_POLL_INTERVAL is active; others reserved for
+# planned custom-device configuration and bindkey support)
 CONF_BINDKEY = "bindkey"
 CONF_CUSTOM_DEVICES = "custom_devices"
 CONF_DEVICE_ADDRESS = "address"
@@ -12,7 +13,7 @@ CONF_DEVICE_NAME = "name"
 CONF_POLL_INTERVAL = "poll_interval"
 CONF_FORCE_PROBE = "force_probe"
 
-# Attributes
+# Attributes (reserved for future entity extra-state attributes)
 ATTR_MANUFACTURER = "manufacturer"
 ATTR_MODEL = "model"
 ATTR_SIGNAL_STRENGTH = "rssi"
@@ -28,7 +29,7 @@ DEFAULT_READ_TIMEOUT = 10.0
 # Probe configuration
 MAX_PROBE_FAILURES = 3
 MAX_CONCURRENT_PROBES = 2
-PROBE_FAILURE_BACKOFF_MINUTES = [5, 30, 120]  # Backoff after each failure
+PROBE_FAILURE_BACKOFF_MINUTES = [5, 30, 120]  # Reserved for exponential backoff
 
 # Services that should NOT count as "parseable SIG data"
 # These are standard BLE services that any BLE monitor can expose
@@ -40,6 +41,6 @@ EXCLUDED_SERVICE_NAMES: frozenset[str] = frozenset(
     }
 )
 
-# Entity key prefixes
+# Entity key prefixes (reserved for consistent key generation)
 ENTITY_KEY_PREFIX_GATT = "gatt_"
 ENTITY_KEY_PREFIX_ADVERT = "adv_"
