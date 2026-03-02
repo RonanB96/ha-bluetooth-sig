@@ -23,9 +23,15 @@ from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataUpdate,
 )
+from homeassistant.components.sensor import SensorDeviceClass
 
 from custom_components.bluetooth_sig_devices.const import DOMAIN
-from custom_components.bluetooth_sig_devices.coordinator import BluetoothSIGCoordinator
+from custom_components.bluetooth_sig_devices.coordinator import (
+    _UNIT_TO_DEVICE_CLASS,
+    BluetoothSIGCoordinator,
+    _normalize_uuid_short,
+    _resolve_device_class,
+)
 
 
 class TestBluetoothSIGCoordinator:
@@ -308,10 +314,10 @@ class TestEntityCreationFromSIGCharacteristicData:
 
         assert len(location_keys) >= 1
         location_key = location_keys[0]
-        # BodySensorLocation is an IntEnum → _to_ha_state returns str()
+        # BodySensorLocation is an IntEnum → _to_ha_state returns .name
         value = result.entity_data[location_key]
         assert isinstance(value, str)
-        assert value == str(1)  # Chest location, stringified IntEnum
+        assert value == "CHEST"  # Chest location member name
 
     def test_rssi_only_device_creates_no_entities(
         self,
@@ -611,6 +617,78 @@ class TestCoordinatorGATTMethods:
         assert hasattr(coordinator, "validator")
         assert isinstance(coordinator.validator, DeviceValidator)
 
+    async def test_probe_failures_incremented_on_generic_exception(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Non-timeout exceptions in _async_probe_and_setup must increment _probe_failures."""
+        from unittest.mock import AsyncMock
+
+        service_info = BluetoothServiceInfoBleak(
+            name="GATT Device",
+            address="AA:BB:CC:DD:EE:FF",
+            rssi=-70,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        coordinator.async_probe_device = AsyncMock(
+            side_effect=RuntimeError("adapter error")
+        )
+
+        # Invoke the probe-and-setup directly, bypassing the semaphore check
+        await coordinator._async_probe_and_setup(service_info)
+
+        assert coordinator._probe_failures.get("AA:BB:CC:DD:EE:FF", 0) == 1
+        assert "AA:BB:CC:DD:EE:FF" not in coordinator._pending_probes
+
+    async def test_probe_task_tracked_in_ensure_device_processor(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """_ensure_device_processor stores the probe task in _probe_tasks."""
+        mock_task = MagicMock()
+
+        def _capture_and_close(coro, *args, **kwargs):
+            coro.close()
+            return mock_task
+
+        mock_hass.async_create_task.side_effect = _capture_and_close
+
+        service_info = BluetoothServiceInfoBleak(
+            name="GATT Device",
+            address="AA:BB:CC:DD:EE:FF",
+            rssi=-70,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        coordinator._async_add_entities = MagicMock()
+        coordinator._entity_class = MagicMock()
+
+        coordinator._ensure_device_processor(service_info)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator._probe_tasks
+        assert coordinator._probe_tasks["AA:BB:CC:DD:EE:FF"] is mock_task
+
 
 class TestGATTPollInterval:
     """Test cases for poll_interval wiring and GATT polling lifecycle."""
@@ -707,9 +785,7 @@ class TestGATTCacheMerge:
         )
         from homeassistant.components.sensor import SensorEntityDescription
 
-        gatt_key = PassiveBluetoothEntityKey(
-            "gatt_2a6e", "aabbccddeee01"
-        )
+        gatt_key = PassiveBluetoothEntityKey("gatt_2a6e", "aabbccddeee01")
         cached_update = PassiveBluetoothDataUpdate(
             devices={},
             entity_descriptions={
@@ -772,6 +848,24 @@ class TestAsyncStop:
         assert coordinator._processor_coordinators == {}
         assert coordinator.devices == {}
 
+    async def test_async_stop_cancels_probe_tasks(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test async_stop cancels all in-flight GATT probe tasks."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        mock_probe_task = MagicMock()
+        coordinator._probe_tasks["AA:BB:CC:DD:EE:01"] = mock_probe_task
+        coordinator._pending_probes.add("AA:BB:CC:DD:EE:01")
+
+        await coordinator.async_stop()
+
+        mock_probe_task.cancel.assert_called_once()
+        assert coordinator._probe_tasks == {}
+        assert coordinator._pending_probes == set()
+
     async def test_async_stop_cancels_discovery(
         self,
         mock_hass: MagicMock,
@@ -793,6 +887,7 @@ class TestAsyncStop:
 # Local test enums — used to test _to_ha_state without depending on library
 # __str__ changes that are not yet released.
 # ---------------------------------------------------------------------------
+
 
 class _TestSensorLocation(enum.IntEnum):
     """Minimal IntEnum matching SensorLocationValue's shape."""
@@ -852,17 +947,17 @@ class TestToHaState:
         result = BluetoothSIGCoordinator._to_ha_state(_TestSensorLocation.TOP_OF_SHOE)
         assert isinstance(result, str)
 
-    def test_intenum_without_custom_str_returns_numeric_string(self) -> None:
-        """IntEnum without __str__ override → Python 3.12 gives numeric string."""
+    def test_intenum_without_custom_str_returns_name(self) -> None:
+        """IntEnum without __str__ override → returns .name (member identifier)."""
         result = BluetoothSIGCoordinator._to_ha_state(_TestSensorLocation.OTHER)
-        assert result == str(_TestSensorLocation.OTHER)
+        assert result == "OTHER"
 
-    def test_intenum_with_custom_str_returns_label(self) -> None:
-        """IntEnum with __str__ override → human-readable label."""
+    def test_intenum_with_custom_str_returns_name(self) -> None:
+        """IntEnum with __str__ override → .name is still returned (not str())."""
         result = BluetoothSIGCoordinator._to_ha_state(
             _TestSensorLocationWithStr.TOP_OF_SHOE
         )
-        assert result == "Top Of Shoe"
+        assert result == "TOP_OF_SHOE"
 
     def test_intenum_is_not_plain_int(self) -> None:
         """IntEnum must NOT return a plain int — it should return str."""
@@ -870,25 +965,26 @@ class TestToHaState:
         assert not isinstance(result, int)
 
     def test_real_library_intenum_barometric_pressure_trend(self) -> None:
-        """Real library IntEnum (BarometricPressureTrend) already has __str__."""
+        """Real library IntEnum (BarometricPressureTrend) returns .name."""
         from bluetooth_sig.gatt.characteristics.barometric_pressure_trend import (
             BarometricPressureTrend,
         )
+
         val = BarometricPressureTrend(0)
         result = BluetoothSIGCoordinator._to_ha_state(val)
         assert isinstance(result, str)
-        assert result == str(val)
+        assert result == val.name
 
     def test_real_library_intenum_door_window_status(self) -> None:
-        """Real library IntEnum (DoorWindowOpenStatus) — no custom __str__ yet."""
+        """Real library IntEnum (DoorWindowOpenStatus) returns .name."""
         from bluetooth_sig.gatt.characteristics.door_window_status import (
             DoorWindowOpenStatus,
         )
+
         val = DoorWindowOpenStatus(0)
         result = BluetoothSIGCoordinator._to_ha_state(val)
         assert isinstance(result, str)
-        # Should be str(), not int() — even if currently just "0"
-        assert result == str(val)
+        assert result == val.name
 
     # --- IntFlag → int() ---
 
@@ -916,6 +1012,7 @@ class TestToHaState:
         from bluetooth_sig.gatt.characteristics.boot_keyboard_output_report import (
             KeyboardLEDs,
         )
+
         val = KeyboardLEDs(3)  # NUM_LOCK | CAPS_LOCK
         result = BluetoothSIGCoordinator._to_ha_state(val)
         assert isinstance(result, int)
@@ -1026,6 +1123,7 @@ class TestToHaState:
 # Recursive struct decomposition tests (using real bluetooth-sig library types)
 # ---------------------------------------------------------------------------
 
+
 class TestAddStructEntities:
     """Tests for _add_struct_entities recursive decomposition."""
 
@@ -1038,7 +1136,6 @@ class TestAddStructEntities:
         is_diagnostic: bool = False,
     ) -> tuple[dict, dict, dict]:
         """Helper to call _add_struct_entities and return the three dicts."""
-        from unittest.mock import MagicMock
         coord = BluetoothSIGCoordinator.__new__(BluetoothSIGCoordinator)
         descs: dict = {}
         names: dict = {}
@@ -1080,7 +1177,8 @@ class TestAddStructEntities:
     def test_nested_struct_recurses(self) -> None:
         """CyclingPowerVectorData → crank_revolution_data is recursed into."""
         crank = CrankRevolutionData(
-            crank_revolutions=100, last_crank_event_time=0.5,
+            crank_revolutions=100,
+            last_crank_event_time=0.5,
         )
         vec = CyclingPowerVectorData(
             flags=CyclingPowerVectorFlags(0),
@@ -1101,7 +1199,8 @@ class TestAddStructEntities:
     def test_nested_struct_leaf_values(self) -> None:
         """Nested CrankRevolutionData leaf values are coerced correctly."""
         crank = CrankRevolutionData(
-            crank_revolutions=42, last_crank_event_time=1.25,
+            crank_revolutions=42,
+            last_crank_event_time=1.25,
         )
         vec = CyclingPowerVectorData(
             flags=CyclingPowerVectorFlags(0),
@@ -1119,7 +1218,8 @@ class TestAddStructEntities:
     def test_nested_struct_display_names(self) -> None:
         """Display names include the full path through nested structs."""
         crank = CrankRevolutionData(
-            crank_revolutions=100, last_crank_event_time=0.5,
+            crank_revolutions=100,
+            last_crank_event_time=0.5,
         )
         vec = CyclingPowerVectorData(
             flags=CyclingPowerVectorFlags(0),
@@ -1144,7 +1244,8 @@ class TestAddStructEntities:
         + force_array (leaf) + torque_array (leaf) = 6.
         """
         crank = CrankRevolutionData(
-            crank_revolutions=100, last_crank_event_time=0.5,
+            crank_revolutions=100,
+            last_crank_event_time=0.5,
         )
         vec = CyclingPowerVectorData(
             flags=CyclingPowerVectorFlags(0),
@@ -1200,3 +1301,428 @@ class TestAddStructEntities:
         """Passing a non-struct to _add_struct_entities creates no entities."""
         _, _, data = self._run(42)
         assert len(data) == 0
+
+
+# ---------------------------------------------------------------------------
+# _resolve_device_class tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDeviceClass:
+    """Tests for _resolve_device_class mapping function."""
+
+    def test_unambiguous_units_map_correctly(self) -> None:
+        """Each entry in _UNIT_TO_DEVICE_CLASS resolves as expected."""
+        for unit, expected_dc in _UNIT_TO_DEVICE_CLASS.items():
+            result = _resolve_device_class(unit, "Some Sensor")
+            assert result == expected_dc, (
+                f"Unit {unit!r} → {result}, expected {expected_dc}"
+            )
+
+    def test_celsius_maps_to_temperature(self) -> None:
+        result = _resolve_device_class("°C", "Temperature")
+        assert result == SensorDeviceClass.TEMPERATURE
+
+    def test_kelvin_maps_to_temperature(self) -> None:
+        result = _resolve_device_class("K", "Temperature")
+        assert result == SensorDeviceClass.TEMPERATURE
+
+    def test_percent_battery_resolved(self) -> None:
+        result = _resolve_device_class("%", "Battery Level")
+        assert result == SensorDeviceClass.BATTERY
+
+    def test_percent_humidity_resolved(self) -> None:
+        result = _resolve_device_class("%", "Humidity")
+        assert result == SensorDeviceClass.HUMIDITY
+
+    def test_percent_generic_returns_none(self) -> None:
+        """Generic '%' with no battery/humidity name → None."""
+        result = _resolve_device_class("%", "CPU Usage")
+        assert result is None
+
+    def test_ambiguous_ppm_not_mapped_without_uuid(self) -> None:
+        """ppm without a UUID is still ambiguous — unit-only lookup returns None."""
+        result = _resolve_device_class("ppm", "CO2 Concentration")
+        assert result is None
+
+    def test_ambiguous_mm_not_mapped(self) -> None:
+        """mm is deliberately excluded — could be distance or precipitation."""
+        result = _resolve_device_class("mm", "Rainfall")
+        assert result is None
+
+    def test_ambiguous_m_not_mapped(self) -> None:
+        """m is deliberately excluded — could be distance or time months."""
+        result = _resolve_device_class("m", "Distance")
+        assert result is None
+
+    def test_ambiguous_m_per_s_not_mapped(self) -> None:
+        """m/s is deliberately excluded — could be SPEED or WIND_SPEED."""
+        result = _resolve_device_class("m/s", "Wind Speed")
+        assert result is None
+
+    def test_none_unit_returns_none(self) -> None:
+        result = _resolve_device_class(None, "Something")
+        assert result is None
+
+    def test_empty_unit_returns_none(self) -> None:
+        result = _resolve_device_class("", "Something")
+        assert result is None
+
+    def test_whitespace_unit_returns_none(self) -> None:
+        result = _resolve_device_class("  ", "Something")
+        assert result is None
+
+    def test_unknown_unit_returns_none(self) -> None:
+        result = _resolve_device_class("furlongs/fortnight", "Velocity")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _normalize_uuid_short tests
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeUuidShort:
+    """Tests for the _normalize_uuid_short helper."""
+
+    def test_full_uppercase_uuid(self) -> None:
+        assert _normalize_uuid_short("00002A6E-0000-1000-8000-00805F9B34FB") == "2A6E"
+
+    def test_full_lowercase_uuid(self) -> None:
+        assert _normalize_uuid_short("00002a6e-0000-1000-8000-00805f9b34fb") == "2A6E"
+
+    def test_gatt_prefixed_lowercase(self) -> None:
+        assert _normalize_uuid_short("gatt_2a6e") == "2A6E"
+
+    def test_gatt_prefixed_uppercase(self) -> None:
+        assert _normalize_uuid_short("GATT_2A6E") == "2A6E"
+
+    def test_already_short_uppercase(self) -> None:
+        assert _normalize_uuid_short("2A6E") == "2A6E"
+
+    def test_already_short_lowercase(self) -> None:
+        assert _normalize_uuid_short("2a6e") == "2A6E"
+
+    def test_battery_level_uuid(self) -> None:
+        assert _normalize_uuid_short("00002A19-0000-1000-8000-00805F9B34FB") == "2A19"
+
+    def test_invalid_non_hex_returns_none(self) -> None:
+        assert _normalize_uuid_short("ZZZZ") is None
+
+    def test_too_long_non_uuid_returns_none(self) -> None:
+        # 8-char segment after lstrip still too long
+        assert _normalize_uuid_short("ABCD1234") is None
+
+    def test_empty_string_returns_none(self) -> None:
+        assert _normalize_uuid_short("") is None
+
+
+# ---------------------------------------------------------------------------
+# device_class and precision wired into entity descriptions
+# ---------------------------------------------------------------------------
+
+
+class TestDeviceClassWiringSimple:
+    """Tests that device_class appears correctly on simple entities."""
+
+    def test_battery_entity_has_battery_device_class(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Battery Level entity should have device_class=BATTERY."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.update_device(mock_bluetooth_service_info_battery)
+
+        battery_keys = [k for k in result.entity_data if "2a19" in str(k.key).lower()]
+        assert len(battery_keys) >= 1
+
+        for key in battery_keys:
+            desc = result.entity_descriptions[key]
+            if desc.name == "Battery Level":
+                assert desc.device_class == SensorDeviceClass.BATTERY
+                break
+
+    def test_temperature_entity_has_temperature_device_class(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_temperature: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Temperature entity should have device_class=TEMPERATURE."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.update_device(mock_bluetooth_service_info_temperature)
+
+        temp_keys = [k for k in result.entity_data if "2a6e" in str(k.key).lower()]
+        assert len(temp_keys) >= 1
+
+        for key in temp_keys:
+            desc = result.entity_descriptions[key]
+            if desc.name == "Temperature":
+                assert desc.device_class == SensorDeviceClass.TEMPERATURE
+                break
+
+    def test_humidity_entity_has_humidity_device_class(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_humidity: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Humidity entity should have device_class=HUMIDITY."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.update_device(mock_bluetooth_service_info_humidity)
+
+        humidity_keys = [k for k in result.entity_data if "2a6f" in str(k.key).lower()]
+        assert len(humidity_keys) >= 1
+
+        for key in humidity_keys:
+            desc = result.entity_descriptions[key]
+            if desc.name == "Humidity":
+                assert desc.device_class == SensorDeviceClass.HUMIDITY
+                break
+
+
+# ---------------------------------------------------------------------------
+# Struct field unit inheritance fix tests
+# ---------------------------------------------------------------------------
+
+
+class TestStructFieldUnitInheritance:
+    """Tests that non-numeric struct fields do not inherit parent unit."""
+
+    @staticmethod
+    def _run(
+        struct_value: object,
+        char_name: str = "Test Char",
+        uuid: str = "2A37",
+        unit: str | None = "bpm",
+        is_diagnostic: bool = False,
+    ) -> tuple[dict, dict, dict]:
+        """Helper to call _add_struct_entities and return the three dicts."""
+        coord = BluetoothSIGCoordinator.__new__(BluetoothSIGCoordinator)
+        descs: dict = {}
+        names: dict = {}
+        data: dict = {}
+        coord._add_struct_entities(
+            "aabbccddee01",
+            uuid,
+            char_name,
+            struct_value,
+            unit,
+            is_diagnostic,
+            descs,
+            names,
+            data,
+        )
+        return descs, names, data
+
+    def test_numeric_fields_keep_unit(self) -> None:
+        """Plain int/float fields should keep the parent unit."""
+        hr = HeartRateData(
+            heart_rate=72,
+            sensor_contact=SensorContactState.DETECTED,
+            energy_expended=150,
+            rr_intervals=(0.8,),
+            flags=HeartRateMeasurementFlags(0),
+            sensor_location=BodySensorLocation.CHEST,
+        )
+        descs, _, _ = self._run(hr, unit="bpm")
+        desc_map = {k.key: v for k, v in descs.items()}
+
+        # heart_rate is a plain int → should keep "bpm"
+        assert desc_map["2A37_heart_rate"].native_unit_of_measurement == "bpm"
+
+    def test_intflag_field_drops_unit(self) -> None:
+        """IntFlag fields should NOT inherit the parent unit."""
+        hr = HeartRateData(
+            heart_rate=72,
+            sensor_contact=SensorContactState.DETECTED,
+            energy_expended=150,
+            rr_intervals=(0.8,),
+            flags=HeartRateMeasurementFlags(0),
+            sensor_location=BodySensorLocation.CHEST,
+        )
+        descs, _, _ = self._run(hr, unit="bpm")
+        desc_map = {k.key: v for k, v in descs.items()}
+
+        # flags is IntFlag → should NOT have "bpm"
+        assert desc_map["2A37_flags"].native_unit_of_measurement is None
+
+    def test_intenum_field_drops_unit(self) -> None:
+        """IntEnum fields should NOT inherit the parent unit."""
+        hr = HeartRateData(
+            heart_rate=72,
+            sensor_contact=SensorContactState.DETECTED,
+            energy_expended=150,
+            rr_intervals=(0.8,),
+            flags=HeartRateMeasurementFlags(0),
+            sensor_location=BodySensorLocation.CHEST,
+        )
+        descs, _, _ = self._run(hr, unit="bpm")
+        desc_map = {k.key: v for k, v in descs.items()}
+
+        # sensor_contact is IntEnum (has .name) → should NOT have "bpm"
+        assert desc_map["2A37_sensor_contact"].native_unit_of_measurement is None
+        # sensor_location is also IntEnum
+        assert desc_map["2A37_sensor_location"].native_unit_of_measurement is None
+
+    def test_tuple_field_drops_unit(self) -> None:
+        """Non-scalar fields (tuple→str) should NOT inherit the parent unit."""
+        hr = HeartRateData(
+            heart_rate=72,
+            sensor_contact=SensorContactState.DETECTED,
+            energy_expended=150,
+            rr_intervals=(0.8, 0.9),
+            flags=HeartRateMeasurementFlags(0),
+            sensor_location=BodySensorLocation.CHEST,
+        )
+        descs, _, _ = self._run(hr, unit="bpm")
+        desc_map = {k.key: v for k, v in descs.items()}
+
+        # rr_intervals is tuple → str fallback → no unit
+        assert desc_map["2A37_rr_intervals"].native_unit_of_measurement is None
+
+    def test_energy_expended_keeps_unit(self) -> None:
+        """energy_expended is a plain int → should keep parent unit."""
+        hr = HeartRateData(
+            heart_rate=72,
+            sensor_contact=SensorContactState.DETECTED,
+            energy_expended=150,
+            rr_intervals=(0.8,),
+            flags=HeartRateMeasurementFlags(0),
+            sensor_location=BodySensorLocation.CHEST,
+        )
+        descs, _, _ = self._run(hr, unit="bpm")
+        desc_map = {k.key: v for k, v in descs.items()}
+
+        # energy_expended is int → keeps unit
+        assert desc_map["2A37_energy_expended"].native_unit_of_measurement == "bpm"
+
+
+# ---------------------------------------------------------------------------
+# Deduplication across interpreted + service_data paths
+# ---------------------------------------------------------------------------
+
+
+class TestDeduplication:
+    """Tests that interpreted + service_data entities are deduplicated."""
+
+    def test_service_data_skipped_when_in_skip_uuids(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """_add_service_data_entities skips UUIDs already in skip_uuids."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        descs: dict = {}
+        names: dict = {}
+        data: dict = {}
+
+        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
+        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
+
+        coordinator._add_service_data_entities(
+            "aabbccddeee01",
+            service_data,
+            descs,
+            names,
+            data,
+            skip_uuids={battery_uuid_str},
+        )
+
+        # UUID was in skip_uuids → no entity created
+        assert len(data) == 0
+
+    def test_service_data_created_when_not_in_skip_uuids(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """_add_service_data_entities creates entity when UUID not in skip_uuids."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        descs: dict = {}
+        names: dict = {}
+        data: dict = {}
+
+        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
+        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
+
+        coordinator._add_service_data_entities(
+            "aabbccddeee01",
+            service_data,
+            descs,
+            names,
+            data,
+            skip_uuids=set(),  # empty → nothing skipped
+        )
+
+        assert len(data) >= 1
+
+    def test_seen_uuids_populated_by_sig_entity_path(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
+    ) -> None:
+        """After update_device, Battery UUID must appear in seen_uuids when tracked."""
+        from bluetooth_sig.advertising import SIGCharacteristicData
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        descs: dict = {}
+        names: dict = {}
+        data: dict = {}
+
+        battery_uuid = BluetoothUUID("00002a19-0000-1000-8000-00805f9b34fb")
+        sig_data = SIGCharacteristicData(
+            uuid=battery_uuid,
+            characteristic_name="Battery Level",
+            parsed_value=75,
+        )
+
+        seen: set[str] = set()
+        coordinator._add_sig_characteristic_entity(
+            "aabbccddeee01",
+            sig_data,
+            descs,
+            names,
+            data,
+            seen_uuids=seen,
+        )
+
+        assert "00002a19-0000-1000-8000-00805f9b34fb" in seen
+
+    def test_service_data_not_skipped_when_uuid_absent(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Different UUIDs are not affected by skip_uuids."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        descs: dict = {}
+        names: dict = {}
+        data: dict = {}
+
+        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
+        temp_uuid_str = "00002a6e-0000-1000-8000-00805f9b34fb"
+        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
+
+        coordinator._add_service_data_entities(
+            "aabbccddeee01",
+            service_data,
+            descs,
+            names,
+            data,
+            skip_uuids={
+                temp_uuid_str
+            },  # different UUID — battery should still be created
+        )
+
+        assert len(data) >= 1

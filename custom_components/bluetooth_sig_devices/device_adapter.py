@@ -48,17 +48,16 @@ from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from homeassistant.core import HomeAssistant
+
+from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
 
 # Bleak returns characteristic properties as lowercase hyphenated strings
 # (e.g. "write-without-response"), but GattProperty is an IntEnum with
 # bitmask values.  Build the mapping once from the enum member names.
 _BLEAK_PROP_TO_GATT: dict[str, GattProperty] = {
-    member.name.lower().replace("_", "-"): member
-    for member in GattProperty
+    member.name.lower().replace("_", "-"): member for member in GattProperty
 }
-from homeassistant.core import HomeAssistant
-
-from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
 

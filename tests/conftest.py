@@ -23,17 +23,18 @@ def auto_enable_custom_integrations(enable_custom_integrations: Any) -> Generato
 
 
 @pytest.fixture
-def mock_bluetooth_adapters() -> Generator[None]:
-    """Mock bluetooth adapters."""
-    with patch(
-        "homeassistant.components.bluetooth.async_scanner_count", return_value=1
-    ):
-        yield
+def mock_bluetooth_disabled() -> Generator[None]:
+    """Fully disable the Bluetooth component for config-entry / config-flow tests.
 
+    Patches ``async_setup`` and ``async_setup_entry`` so that HA never
+    attempts real hardware or D-Bus access when loading the ``bluetooth``
+    dependency.  Also patches ``async_scanner_count`` at the component level
+    AND at the config-flow import site so availability checks pass.
 
-@pytest.fixture(autouse=True)
-def mock_bluetooth_setup() -> Generator[None]:
-    """Mock the bluetooth component setup to avoid hardware access."""
+    Do NOT use this in tests that also request the ``enable_bluetooth``
+    fixture — ``enable_bluetooth`` needs the real (framework-mocked) Bluetooth
+    setup to create a live ``BluetoothManager``.
+    """
     with (
         patch(
             "homeassistant.components.bluetooth.async_setup",
@@ -50,9 +51,32 @@ def mock_bluetooth_setup() -> Generator[None]:
             return_value=1,
         ),
         patch(
-            "homeassistant.components.bluetooth.async_ble_device_from_address",
-            return_value=None,
+            "custom_components.bluetooth_sig_devices.config_flow.async_scanner_count",
+            return_value=1,
         ),
+        patch(
+            "custom_components.bluetooth_sig_devices.__init__.bluetooth.async_scanner_count",
+            return_value=1,
+        ),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def mock_bluetooth_setup() -> Generator[None]:
+    """Prevent unit tests from hitting the real Bluetooth manager.
+
+    Only patches ``async_ble_device_from_address`` so that coordinator
+    methods that look up a ``BLEDevice`` receive ``None`` instead of
+    triggering a ``RuntimeError`` from ``habluetooth.get_manager()``.
+
+    This is a lightweight autouse patch that does NOT mock
+    ``async_setup_entry`` or ``async_scanner_count``, so it is compatible
+    with the ``enable_bluetooth`` fixture used in integration tests.
+    """
+    with patch(
+        "homeassistant.components.bluetooth.async_ble_device_from_address",
+        return_value=None,
     ):
         yield
 

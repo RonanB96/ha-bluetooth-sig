@@ -50,6 +50,25 @@ class BluetoothSIGSensorEntity(
     """Representation of a Bluetooth SIG sensor."""
 
     _attr_has_entity_name = True
+    _unavailable_logged: bool = False
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available, logging transitions once."""
+        is_available = super().available
+        if not is_available and not self._unavailable_logged:
+            _LOGGER.info(
+                "Bluetooth device for entity %s is unavailable",
+                self.entity_description.key,
+            )
+            self._unavailable_logged = True
+        elif is_available and self._unavailable_logged:
+            _LOGGER.info(
+                "Bluetooth device for entity %s is back online",
+                self.entity_description.key,
+            )
+            self._unavailable_logged = False
+        return is_available
 
     @property
     def native_value(self) -> float | int | str | bool | None:
@@ -58,9 +77,3 @@ class BluetoothSIGSensorEntity(
         if isinstance(value, (float, int, str, bool)):
             return value
         return None
-
-    @property
-    def available(self) -> bool:
-        """Return if entity is available."""
-        # Entity is available if we have data for it
-        return self.processor.entity_data.get(self.entity_key) is not None

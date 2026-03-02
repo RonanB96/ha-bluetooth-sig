@@ -11,9 +11,12 @@ from bluetooth_sig.advertising import SIGCharacteristicData
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.gatt.exceptions import SpecialValueDetectedError
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
+from bluetooth_sig.registry.uuids.units import UnitsRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.gatt_enums import CharacteristicRole
+from bluetooth_sig.types.registry.common import CharacteristicSpec
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
@@ -28,7 +31,11 @@ from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothEntityKey,
     PassiveBluetoothProcessorCoordinator,
 )
-from homeassistant.components.sensor import SensorEntityDescription, SensorStateClass
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntityDescription,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -49,14 +56,181 @@ from .device_validator import DeviceValidator, GATTProbeResult
 _LOGGER = logging.getLogger(__name__)
 
 # Role sets used to gate entity creation across all paths
-_SKIP_ROLES: frozenset[CharacteristicRole] = frozenset({
-    CharacteristicRole.CONTROL,
-    CharacteristicRole.FEATURE,
-})
-_DIAGNOSTIC_ROLES: frozenset[CharacteristicRole] = frozenset({
-    CharacteristicRole.STATUS,
-    CharacteristicRole.INFO,
-})
+_SKIP_ROLES: frozenset[CharacteristicRole] = frozenset(
+    {
+        CharacteristicRole.CONTROL,
+        CharacteristicRole.FEATURE,
+    }
+)
+_DIAGNOSTIC_ROLES: frozenset[CharacteristicRole] = frozenset(
+    {
+        CharacteristicRole.STATUS,
+        CharacteristicRole.INFO,
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Unit → SensorDeviceClass fallback mapping.
+#
+# Used when no UUID mapping is available (e.g. struct field sub-entities
+# which do not have their own UUID, or unknown characteristics with
+# recognisable units).  Only truly 1:1 unambiguous mappings are included;
+# every entry here must be valid per HA's DEVICE_CLASS_UNITS.
+#
+# Deliberately EXCLUDED (ambiguous, multi-class, or unit string mismatch):
+#   "%"               — BATTERY / HUMIDITY / MOISTURE / POWER_FACTOR
+#                       (disambiguated by name; see _resolve_device_class)
+#   "Pa"              — both PRESSURE and ATMOSPHERIC_PRESSURE accept it
+#   "mmHg"            — not in HA's UnitOfPressure enum
+#   "ppm"             — CO2, CO, CH4, or VOC_PARTS; cannot differentiate
+#   "ppb"             — NO2, O3, SO2, or VOC_PARTS; cannot differentiate
+#   "m"               — DISTANCE or UnitOfTime.MONTHS collision
+#   "mm"              — DISTANCE or PRECIPITATION
+#   "m/s"             — SPEED or WIND_SPEED
+#   "°"               — WIND_DIRECTION but also magnetic declination/bearing
+#   "dB SPL"          — not a recognised HA unit constant (HA uses "dB")
+#   "beats per minute" — no matching HA SensorDeviceClass
+#   "kilowatt hour"   — library long-form; HA expects "kWh"
+#   "kilometre per hour" — library long-form; HA expects "km/h"
+#   "watt per square metre" — library long-form; HA expects "W/m²"
+#   "kg/m³"           — not in HA's ABSOLUTE_HUMIDITY units (g/m³ or mg/m³)
+#   "T"               — no HA SensorDeviceClass for magnetic flux density
+#   "N"               — no HA SensorDeviceClass for force
+# ---------------------------------------------------------------------------
+_UNIT_TO_DEVICE_CLASS: dict[str, SensorDeviceClass] = {
+    # Temperature
+    "°C": SensorDeviceClass.TEMPERATURE,
+    "K": SensorDeviceClass.TEMPERATURE,
+    # Electrical
+    "V": SensorDeviceClass.VOLTAGE,
+    "mV": SensorDeviceClass.VOLTAGE,
+    "A": SensorDeviceClass.CURRENT,
+    "mA": SensorDeviceClass.CURRENT,
+    "W": SensorDeviceClass.POWER,
+    "mW": SensorDeviceClass.POWER,
+    "kW": SensorDeviceClass.POWER,
+    "VA": SensorDeviceClass.APPARENT_POWER,
+    "kVA": SensorDeviceClass.APPARENT_POWER,
+    # Energy
+    "J": SensorDeviceClass.ENERGY,
+    "kJ": SensorDeviceClass.ENERGY,
+    "Wh": SensorDeviceClass.ENERGY,
+    "kWh": SensorDeviceClass.ENERGY,
+    # Frequency
+    "Hz": SensorDeviceClass.FREQUENCY,
+    "kHz": SensorDeviceClass.FREQUENCY,
+    # Mass
+    "kg": SensorDeviceClass.WEIGHT,
+    "g": SensorDeviceClass.WEIGHT,
+    # Illuminance
+    "lx": SensorDeviceClass.ILLUMINANCE,
+    # Duration — HA UnitOfTime.SECONDS = "s"; unambiguous in BLE context
+    "s": SensorDeviceClass.DURATION,
+    "ms": SensorDeviceClass.DURATION,
+    "min": SensorDeviceClass.DURATION,
+    # Signal strength
+    "dBm": SensorDeviceClass.SIGNAL_STRENGTH,
+    "dB": SensorDeviceClass.SIGNAL_STRENGTH,
+    # Pressure — Pa is excluded (PRESSURE vs ATMOSPHERIC_PRESSURE ambiguity),
+    # but hPa is used exclusively for atmospheric pressure in practice
+    "hPa": SensorDeviceClass.ATMOSPHERIC_PRESSURE,
+    "mbar": SensorDeviceClass.ATMOSPHERIC_PRESSURE,
+}
+
+
+# Suggested display precision by device class.
+# Struct field names that indicate a cumulative total.
+_CUMULATIVE_FIELD_NAMES: frozenset[str] = frozenset(
+    {
+        "cumulative_wheel_revolutions",
+        "cumulative_crank_revolutions",
+        "accumulated_energy",
+        "energy_expended",
+        "total_distance",
+        "accumulated_torque",
+    }
+)
+
+
+def _resolve_field_unit(
+    field_name: str,
+    spec: CharacteristicSpec | None,
+) -> str | None:
+    """Resolve per-field unit from the GSS specification.
+
+    Looks up the ``FieldSpec`` matching *field_name* in the characteristic's
+    GSS ``structure`` list and converts its ``unit_id`` to a human-readable
+    symbol via the SIG units registry.
+
+    Returns ``None`` when no per-field unit is available.
+    """
+    if spec is None or not spec.structure:
+        return None
+
+    for field_spec in spec.structure:
+        if field_spec.python_name == field_name:
+            uid = field_spec.unit_id
+            if uid is None:
+                return None
+            full_id = f"org.bluetooth.unit.{uid}"
+            units_reg = UnitsRegistry.get_instance()
+            info = units_reg.get_info(full_id)
+            if info and info.symbol:
+                return info.symbol
+            return None
+
+    return None
+
+
+def _normalize_uuid_short(uuid_str: str) -> str | None:
+    """Return the 4-character uppercase hex short UUID, or ``None``.
+
+    Handles three input formats:
+    - Full UUID:        ``"00002A6E-0000-1000-8000-00805F9B34FB"``
+    - GATT-prefixed:   ``"gatt_2a6e"``
+    - Already short:   ``"2A6E"``
+    """
+    s = uuid_str.strip().upper()
+    if s.startswith("GATT_"):
+        s = s[5:]
+    if "-" in s:
+        # Full-form: first segment is "00002A6E"; strip leading zeros.
+        s = s.split("-")[0].lstrip("0") or "0"
+    # Bluetooth SIG short UUIDs are exactly 4 hex characters.
+    if 1 <= len(s) <= 4 and all(c in "0123456789ABCDEF" for c in s):
+        return s.zfill(4)
+    return None
+
+
+def _resolve_device_class(
+    unit: str | None,
+    name: str,
+) -> SensorDeviceClass | None:
+    """Derive ``SensorDeviceClass`` from unit and entity name.
+
+    Resolution order:
+    1. Name-based disambiguation for "%" (battery vs humidity).
+    2. Unit-only fallback for clearly 1:1 cases.
+
+    No per-UUID or per-characteristic maps — resolution is entirely
+    driven by the unit string and the entity name provided by the
+    library.
+    """
+    if not unit or not unit.strip():
+        return None
+
+    # 1. Disambiguate "%" by entity name (SIG naming convention)
+    if unit == "%":
+        lower_name = name.lower()
+        if "battery" in lower_name:
+            return SensorDeviceClass.BATTERY
+        if "humidity" in lower_name:
+            return SensorDeviceClass.HUMIDITY
+        return None  # generic percentage — no device class
+
+    # 2. Unit-only fallback
+    return _UNIT_TO_DEVICE_CLASS.get(unit)
+
 
 class BluetoothSIGCoordinator:
     """Coordinator for managing Bluetooth SIG devices.
@@ -69,7 +243,9 @@ class BluetoothSIGCoordinator:
     discover characteristics that can be parsed by the library.
     """
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, *, poll_interval: int = 300) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, *, poll_interval: int = 300
+    ) -> None:
         """Initialize the coordinator."""
         self.hass = hass
         self.entry = entry
@@ -110,6 +286,8 @@ class BluetoothSIGCoordinator:
         ] = {}
         # Periodic GATT polling tasks keyed by device address
         self._gatt_poll_tasks: dict[str, asyncio.Task[None]] = {}
+        # In-flight GATT probe tasks keyed by device address
+        self._probe_tasks: dict[str, asyncio.Task[None]] = {}
 
     @staticmethod
     def _build_excluded_uuids() -> tuple[frozenset[str], frozenset[str]]:
@@ -160,20 +338,25 @@ class BluetoothSIGCoordinator:
         the declared ``python_type`` metadata.  This is forward-compatible:
         when the library adds new types the ``str()`` fallback handles them.
 
-        Order matters — ``bool`` is checked before ``int`` because
-        ``bool`` subclasses ``int``.
+        Order matters:
+        - ``bool`` is checked before ``int`` (bool subclasses int)
+        - ``IntFlag`` is checked before the ``.name`` branch — bit-field
+          values have a ``.name`` attribute but should be stored as plain int
+        - ``IntEnum`` (and any enum with ``.name``) returns the member name
         """
-        if getattr(value, "name", None) is not None:
-            return value.name
         if isinstance(value, bool):
             return value
-        if isinstance(value, int):      # catches IntFlag, plain int
+        if isinstance(value, enum.IntFlag):  # must be before .name check
+            return int(value)
+        if getattr(value, "name", None) is not None:  # IntEnum, Enum, etc.
+            return value.name
+        if isinstance(value, int):
             return int(value)
         if isinstance(value, float):
             return value
         if isinstance(value, str):
             return value
-        # Everything else (datetime, timedelta, date, enum.Enum, etc.)
+        # Everything else (datetime, timedelta, date, etc.)
         return str(value)
 
     async def async_probe_device(
@@ -356,14 +539,13 @@ class BluetoothSIGCoordinator:
                         address,
                         result.parseable_count,
                     )
-                    # Re-check and create processor now that we have probe results
-                    # The _has_supported_data check will now find the probe results
-                    self._ensure_device_processor(service_info)
-
-                    # Seed entity data with an initial GATT read
-                    initial_update = await self.async_poll_gatt_characteristics(
-                        address
-                    )
+                    # Seed entity data with an initial GATT read BEFORE
+                    # creating the processor.  When the PBPC starts it
+                    # immediately replays the last-known advertisement via
+                    # the bluetooth manager; the cached data must already be
+                    # present so that _build_passive_bluetooth_update() can
+                    # merge it into that first update and create entities.
+                    initial_update = await self.async_poll_gatt_characteristics(address)
                     if initial_update:
                         self._cached_gatt_updates[address] = initial_update
                         _LOGGER.debug(
@@ -371,6 +553,10 @@ class BluetoothSIGCoordinator:
                             len(initial_update.entity_data),
                             address,
                         )
+
+                    # Create processor now that we have both probe results
+                    # and cached GATT data.
+                    self._ensure_device_processor(service_info)
 
                     # Start periodic polling at poll_interval
                     self._start_gatt_poll_loop(address)
@@ -380,9 +566,7 @@ class BluetoothSIGCoordinator:
                         address,
                     )
             except TimeoutError:
-                self._probe_failures[address] = (
-                    self._probe_failures.get(address, 0) + 1
-                )
+                self._probe_failures[address] = self._probe_failures.get(address, 0) + 1
                 _LOGGER.debug(
                     "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
                     address,
@@ -391,13 +575,17 @@ class BluetoothSIGCoordinator:
                     MAX_PROBE_FAILURES,
                 )
             except Exception as err:
+                self._probe_failures[address] = self._probe_failures.get(address, 0) + 1
                 _LOGGER.debug(
-                    "GATT probe failed for %s: %s",
+                    "GATT probe failed for %s: %s (attempt %d/%d)",
                     address,
                     err,
+                    self._probe_failures[address],
+                    MAX_PROBE_FAILURES,
                 )
             finally:
                 self._pending_probes.discard(address)
+                self._probe_tasks.pop(address, None)
 
             # Brief delay between probes to let BLE adapter recover
             await asyncio.sleep(0.5)
@@ -494,6 +682,7 @@ class BluetoothSIGCoordinator:
                             entity_descriptions,
                             entity_names,
                             entity_data,
+                            spec=char_instance.spec,
                         )
                     else:
                         self._add_simple_entity(
@@ -682,6 +871,7 @@ class BluetoothSIGCoordinator:
                 advertisement.interpreter_name,
                 advertisement.interpreted_data,
             )
+            seen_uuids: set[str] = set()
             self._add_interpreted_entities(
                 device_id,
                 advertisement.interpreter_name,
@@ -689,6 +879,7 @@ class BluetoothSIGCoordinator:
                 entity_descriptions,
                 entity_names,
                 entity_data,
+                seen_uuids=seen_uuids,
             )
 
         # Process service data for standard GATT characteristics
@@ -699,6 +890,7 @@ class BluetoothSIGCoordinator:
                 entity_descriptions,
                 entity_names,
                 entity_data,
+                skip_uuids=seen_uuids if advertisement.interpreted_data else set(),
             )
 
         # Merge in cached GATT poll data so entities reflect fresh readings
@@ -742,6 +934,8 @@ class BluetoothSIGCoordinator:
         entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
         entity_names: dict[PassiveBluetoothEntityKey, str | None],
         entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+        *,
+        seen_uuids: set[str] | None = None,
     ) -> None:
         """Add entities from interpreted advertising data."""
         # Handle SIGCharacteristicData from the library
@@ -752,6 +946,7 @@ class BluetoothSIGCoordinator:
                 entity_descriptions,
                 entity_names,
                 entity_data,
+                seen_uuids=seen_uuids,
             )
             return
 
@@ -768,6 +963,8 @@ class BluetoothSIGCoordinator:
         entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
         entity_names: dict[PassiveBluetoothEntityKey, str | None],
         entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+        *,
+        seen_uuids: set[str] | None = None,
     ) -> None:
         """Add entity from SIGCharacteristicData using library metadata.
 
@@ -824,6 +1021,10 @@ class BluetoothSIGCoordinator:
         # Determine entity category from role
         is_diagnostic = role in _DIAGNOSTIC_ROLES
 
+        # Track this UUID so the service_data path can skip it
+        if seen_uuids is not None:
+            seen_uuids.add(str(data.uuid).lower())
+
         # Route on the actual value, not declared python_type
         if hasattr(parsed_value, "__struct_fields__"):
             self._add_struct_entities(
@@ -836,6 +1037,7 @@ class BluetoothSIGCoordinator:
                 entity_descriptions,
                 entity_names,
                 entity_data,
+                spec=char_instance.spec,
             )
         else:
             self._add_simple_entity(
@@ -864,23 +1066,28 @@ class BluetoothSIGCoordinator:
     ) -> None:
         """Add a simple single-value entity."""
         has_unit = bool(unit and unit.strip())
+        dc = _resolve_device_class(unit, name)
         entity_key = PassiveBluetoothEntityKey(uuid, device_id)
         entity_descriptions[entity_key] = SensorEntityDescription(
             key=uuid,
             name=name,
+            device_class=dc,
             native_unit_of_measurement=unit if has_unit else None,
             state_class=SensorStateClass.MEASUREMENT
             if has_unit and not is_diagnostic
             else None,
-            entity_category=EntityCategory.DIAGNOSTIC
-            if is_diagnostic
-            else None,
+            entity_category=EntityCategory.DIAGNOSTIC if is_diagnostic else None,
+            entity_registry_enabled_default=not is_diagnostic,
         )
         entity_names[entity_key] = name
         entity_data[entity_key] = value
         _LOGGER.debug(
             "Added entity %s = %s %s (diag=%s) for device %s",
-            name, value, unit or "", is_diagnostic, device_id,
+            name,
+            value,
+            unit or "",
+            is_diagnostic,
+            device_id,
         )
 
     def _add_struct_entities(
@@ -895,6 +1102,7 @@ class BluetoothSIGCoordinator:
         entity_names: dict[PassiveBluetoothEntityKey, str | None],
         entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
         *,
+        spec: CharacteristicSpec | None = None,
         _prefix: str = "",
     ) -> None:
         """Add entities from a msgspec Struct, recursing into nested structs.
@@ -902,12 +1110,25 @@ class BluetoothSIGCoordinator:
         Each leaf (non-struct) field becomes a single HA entity.  Nested
         structs are recursed into so their leaf fields are also exposed,
         with the key and display name prefixed to avoid collisions.
+
+        Per-field units are resolved from the GSS specification when the
+        characteristic has multiple units (e.g. Heart Rate Measurement
+        where heart_rate is bpm but energy_expended is kJ).  When no
+        per-field unit is available AND the spec has multiple units, the
+        parent unit is dropped to avoid incorrect labelling.
         """
         if not hasattr(struct_value, "__struct_fields__"):
             _LOGGER.debug(
                 "Value for %s is not a struct, cannot extract fields", char_name
             )
             return
+
+        # Determine if the spec has mixed units across fields
+        if spec is not None:
+            _field_units = {f.unit_id for f in spec.structure if f.unit_id}
+            has_multiple_units = len(_field_units) > 1
+        else:
+            has_multiple_units = False
 
         for field_name in struct_value.__struct_fields__:
             field_value = getattr(struct_value, field_name)
@@ -925,6 +1146,7 @@ class BluetoothSIGCoordinator:
                     entity_descriptions,
                     entity_names,
                     entity_data,
+                    spec=spec,
                     _prefix=f"{qualified_name}_",
                 )
                 continue
@@ -936,26 +1158,61 @@ class BluetoothSIGCoordinator:
                 f"{char_name} {qualified_name.replace('_', ' ').title()}"
             )
 
-            has_unit = bool(unit and unit.strip())
+            # Non-numeric struct fields (bool, enum, flag) should not
+            # inherit the parent characteristic's unit.
+            field_ha_value = self._to_ha_state(field_value)
+            is_numeric = (
+                isinstance(field_ha_value, (int, float))
+                and not isinstance(field_value, (bool, enum.IntFlag))
+                and getattr(field_value, "name", None) is None
+            )
+
+            if is_numeric:
+                # Try per-field unit from GSS spec first
+                per_field = _resolve_field_unit(field_name, spec)
+                if per_field is not None:
+                    field_unit = per_field
+                elif has_multiple_units:
+                    # Spec has mixed units but no per-field match —
+                    # safer to drop than inherit the wrong unit.
+                    field_unit = None
+                else:
+                    # Single-unit characteristic: inherit parent unit.
+                    field_unit = unit
+            else:
+                field_unit = None
+
+            has_unit = bool(field_unit and field_unit.strip())
+            dc = _resolve_device_class(field_unit, field_display_name)
+
+            # Cumulative fields should use TOTAL_INCREASING, not MEASUREMENT
+            if (
+                has_unit
+                and not is_diagnostic
+                and qualified_name in _CUMULATIVE_FIELD_NAMES
+            ):
+                state_class = SensorStateClass.TOTAL_INCREASING
+            elif has_unit and not is_diagnostic:
+                state_class = SensorStateClass.MEASUREMENT
+            else:
+                state_class = None
 
             entity_descriptions[entity_key] = SensorEntityDescription(
                 key=f"{uuid}_{qualified_name}",
                 name=field_display_name,
-                native_unit_of_measurement=unit if has_unit else None,
-                state_class=SensorStateClass.MEASUREMENT
-                if has_unit and not is_diagnostic
-                else None,
-                entity_category=EntityCategory.DIAGNOSTIC
-                if is_diagnostic
-                else None,
+                device_class=dc,
+                native_unit_of_measurement=field_unit if has_unit else None,
+                state_class=state_class,
+                entity_category=EntityCategory.DIAGNOSTIC if is_diagnostic else None,
+                entity_registry_enabled_default=not is_diagnostic,
             )
             entity_names[entity_key] = field_display_name
-            entity_data[entity_key] = self._to_ha_state(field_value)
+            entity_data[entity_key] = field_ha_value
             _LOGGER.debug(
                 "Added struct field entity %s = %s (unit=%s, diag=%s) for device %s",
                 field_display_name,
                 field_value,
-                unit or "none",
+                field_unit or "none",
                 is_diagnostic,
                 device_id,
             )
@@ -967,9 +1224,17 @@ class BluetoothSIGCoordinator:
         entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
         entity_names: dict[PassiveBluetoothEntityKey, str | None],
         entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+        *,
+        skip_uuids: set[str] | None = None,
     ) -> None:
         """Add entities from service data using GATT characteristic metadata."""
         for service_uuid, data in service_data.items():
+            if skip_uuids and str(service_uuid).lower() in skip_uuids:
+                _LOGGER.debug(
+                    "Skipping service data %s — already created from interpreted data",
+                    service_uuid,
+                )
+                continue
             try:
                 char_info = self.translator.get_characteristic_info_by_uuid(
                     str(service_uuid)
@@ -1006,10 +1271,13 @@ class BluetoothSIGCoordinator:
 
                 svc_unit = char_info.unit
                 has_unit = bool(svc_unit and svc_unit.strip())
+                svc_name = char_info.name or f"Service {service_uuid}"
+                dc = _resolve_device_class(svc_unit, svc_name)
 
                 entity_descriptions[entity_key] = SensorEntityDescription(
                     key=f"svc_{service_uuid}",
-                    name=char_info.name or f"Service {service_uuid}",
+                    name=svc_name,
+                    device_class=dc,
                     native_unit_of_measurement=svc_unit if has_unit else None,
                     state_class=SensorStateClass.MEASUREMENT
                     if has_unit and not is_diagnostic
@@ -1017,12 +1285,16 @@ class BluetoothSIGCoordinator:
                     entity_category=EntityCategory.DIAGNOSTIC
                     if is_diagnostic
                     else None,
+                    entity_registry_enabled_default=not is_diagnostic,
                 )
 
-                entity_names[entity_key] = (
-                    char_info.name or f"Service {service_uuid}"
-                )
+                entity_names[entity_key] = svc_name
                 entity_data[entity_key] = self._to_ha_state(parsed_value)
+            except SpecialValueDetectedError:
+                _LOGGER.debug(
+                    "Service data %s contains special sentinel value, skipping",
+                    service_uuid,
+                )
             except Exception:
                 _LOGGER.debug(
                     "Could not parse service data for %s",
@@ -1070,10 +1342,13 @@ class BluetoothSIGCoordinator:
             len(already_discovered_connectable),
             len(already_discovered_nonconnectable),
         )
-        # Process all discovered devices
+        # Deduplicate by address (connectable devices appear in both lists)
+        seen_addresses: dict[str, BluetoothServiceInfoBleak] = {}
         for service_info in (
             already_discovered_connectable + already_discovered_nonconnectable
         ):
+            seen_addresses.setdefault(service_info.address, service_info)
+        for service_info in seen_addresses.values():
             self._ensure_device_processor(service_info)
 
         _LOGGER.info(
@@ -1122,9 +1397,7 @@ class BluetoothSIGCoordinator:
                 # First, try as a Service UUID
                 svc_info = self.translator.get_service_info_by_uuid(uuid_str)
                 if svc_info is not None:
-                    svc_chars = self.translator.get_service_characteristics(
-                        uuid_str
-                    )
+                    svc_chars = self.translator.get_service_characteristics(uuid_str)
                     if svc_chars:
                         _LOGGER.debug(
                             "Device %s advertises service %s with %d parseable characteristics",
@@ -1139,9 +1412,7 @@ class BluetoothSIGCoordinator:
                         svc_info.name,
                     )
                 # Second, try as a Characteristic UUID
-                char_info = self.translator.get_characteristic_info_by_uuid(
-                    uuid_str
-                )
+                char_info = self.translator.get_characteristic_info_by_uuid(uuid_str)
                 if char_info is not None:
                     _LOGGER.debug(
                         "Device %s has supported characteristic UUID %s (%s)",
@@ -1242,10 +1513,11 @@ class BluetoothSIGCoordinator:
                 and self._probe_failures.get(address, 0) < MAX_PROBE_FAILURES
             ):
                 self._pending_probes.add(address)
-                self.hass.async_create_task(
+                task = self.hass.async_create_task(
                     self._async_probe_and_setup(service_info),
                     f"bluetooth_sig_probe_{address}",
                 )
+                self._probe_tasks[address] = task
             return
 
         _LOGGER.debug("Creating processor coordinator for new device %s", address)
@@ -1292,6 +1564,13 @@ class BluetoothSIGCoordinator:
     async def async_stop(self) -> None:
         """Stop the coordinator."""
         _LOGGER.debug("Stopping Bluetooth SIG coordinator")
+
+        # Cancel all in-flight GATT probe tasks
+        for address, task in self._probe_tasks.items():
+            task.cancel()
+            _LOGGER.debug("Cancelled GATT probe task for %s", address)
+        self._probe_tasks.clear()
+        self._pending_probes.clear()
 
         # Cancel all GATT polling tasks
         for address, task in self._gatt_poll_tasks.items():

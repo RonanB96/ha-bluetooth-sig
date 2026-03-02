@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
 from .const import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL, DOMAIN
@@ -86,6 +87,24 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await entry.runtime_data.async_stop()
 
     return unload_ok
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant,
+    config_entry: BluetoothSIGConfigEntry,
+    device_entry: dr.DeviceEntry,
+) -> bool:
+    """Allow removal of a device from the device registry.
+
+    For passive BLE discovery, we can never be certain a device is permanently
+    gone (vs. temporarily out of range), so we always permit manual deletion.
+    The device will be re-added automatically if it starts advertising again.
+    """
+    return not any(
+        identifier[1] in config_entry.runtime_data._processor_coordinators
+        for identifier in device_entry.identifiers
+        if identifier[0] == DOMAIN
+    )
 
 
 async def _async_options_updated(

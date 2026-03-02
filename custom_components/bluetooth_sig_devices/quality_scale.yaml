@@ -41,9 +41,9 @@ rules:
   docs-installation-parameters:
     status: exempt
     comment: No installation parameters required.
-  entity-unavailable: todo
+  entity-unavailable: done
   integration-owner: done
-  log-when-unavailable: todo
+  log-when-unavailable: done
   parallel-updates:
     status: exempt
     comment: Uses PassiveBluetoothProcessorCoordinator which handles this.
@@ -54,7 +54,7 @@ rules:
 
   # Gold - Future improvements
   devices: done
-  diagnostics: todo
+  diagnostics: done
   discovery-update-info:
     status: exempt
     comment: Bluetooth discovery info is managed by HA Bluetooth component.
@@ -69,17 +69,21 @@ rules:
   docs-troubleshooting: done
   docs-use-cases: todo
   dynamic-devices: done
-  entity-category: todo
-  entity-device-class: todo
-  entity-disabled-by-default: todo
-  entity-translations: todo
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations:
+    status: done
+    comment: Entities with device_class use HA's automatic device-class name translation. Entities without device_class carry names sourced from the Bluetooth SIG GATT specification metadata.
   exception-translations: todo
   icon-translations: todo
   reconfiguration-flow:
     status: exempt
     comment: Single config entry with no reconfigurable options.
-  repair-issues: todo
-  stale-devices: todo
+  repair-issues:
+    status: exempt
+    comment: No user-fixable repair scenarios exist. Bluetooth adapter availability is managed entirely by the HA Bluetooth component.
+  stale-devices: done
 
   # Platinum - Future improvements
   async-dependency: done
