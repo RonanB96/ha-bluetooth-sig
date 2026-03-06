@@ -52,14 +52,21 @@ from homeassistant.core import HomeAssistant
 
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
 
-# Bleak returns characteristic properties as lowercase hyphenated strings
-# (e.g. "write-without-response"), but GattProperty is an IntEnum with
-# bitmask values.  Build the mapping once from the enum member names.
-_BLEAK_PROP_TO_GATT: dict[str, GattProperty] = {
-    member.name.lower().replace("_", "-"): member for member in GattProperty
-}
-
 _LOGGER = logging.getLogger(__name__)
+
+# Mapping from Bleak's lowercase property strings to GattProperty enum values
+_BLEAK_PROPERTY_MAP: dict[str, GattProperty] = {
+    "broadcast": GattProperty.BROADCAST,
+    "read": GattProperty.READ,
+    "write-without-response": GattProperty.WRITE_WITHOUT_RESPONSE,
+    "write": GattProperty.WRITE,
+    "notify": GattProperty.NOTIFY,
+    "indicate": GattProperty.INDICATE,
+    "authenticated-signed-writes": GattProperty.AUTHENTICATED_SIGNED_WRITES,
+    "extended-properties": GattProperty.EXTENDED_PROPERTIES,
+    "reliable-write": GattProperty.RELIABLE_WRITE,
+    "writable-auxiliaries": GattProperty.WRITABLE_AUXILIARIES,
+}
 
 
 class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
@@ -256,10 +263,10 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 channel_map_update_indication=b"",
             ),
             mesh=MeshAndBroadcastData(
-                mesh_message=None,
-                secure_network_beacon=None,
-                unprovisioned_device_beacon=None,
-                provisioning_bearer=None,
+                mesh_message=b"",
+                secure_network_beacon=b"",
+                unprovisioned_device_beacon=b"",
+                provisioning_bearer=b"",
                 broadcast_name="",
                 broadcast_code=b"",
                 biginfo=b"",
@@ -470,11 +477,17 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 ble_device,
                 self._address,
                 disconnected_callback=self._on_disconnect,
-                max_attempts=2,
-                ble_device_callback=self._get_ble_device,
+                max_attempts=3,
             )
             self._is_connected = True
             self._mtu_size = self._client.mtu_size
+            # Try to acquire MTU to avoid warnings
+            if hasattr(self._client, '_acquire_mtu'):
+                try:
+                    await self._client._acquire_mtu()
+                    self._mtu_size = self._client.mtu_size
+                except Exception:
+                    pass  # Ignore MTU acquisition failures
             self._cached_services = None  # Clear cache on new connection
             _LOGGER.debug(
                 "Connected to %s (MTU: %d)",
@@ -529,7 +542,10 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             service_uuid = BluetoothUUID(bleak_service.uuid)
 
             # Get service class from registry or create a base service
-            service_class = GattServiceRegistry.get_service_class_by_uuid(service_uuid)
+            # Run in executor to avoid blocking I/O in event loop
+            service_class = await asyncio.get_event_loop().run_in_executor(
+                None, GattServiceRegistry.get_service_class_by_uuid, service_uuid
+            )
             if service_class:
                 service_instance = service_class()
             else:
@@ -549,19 +565,30 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 # Convert Bleak properties to GattProperty enum
                 properties: list[GattProperty] = []
                 for prop in bleak_char.properties:
-                    gatt_prop = _BLEAK_PROP_TO_GATT.get(prop)
-                    if gatt_prop is not None:
-                        properties.append(gatt_prop)
+                    mapped = _BLEAK_PROPERTY_MAP.get(prop)
+                    if mapped is not None:
+                        properties.append(mapped)
                     else:
-                        _LOGGER.warning("Unmapped Bleak property: %s", prop)
+                        _LOGGER.warning("Unmapped Bleak GATT property: %s", prop)
 
                 # Get characteristic class from registry
-                char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-                    char_uuid
+                # Run in executor to avoid blocking I/O in event loop
+                char_class = await asyncio.get_event_loop().run_in_executor(
+                    None, CharacteristicRegistry.get_characteristic_class_by_uuid, char_uuid
                 )
                 if char_class:
-                    # Create characteristic instance with runtime properties from device
-                    char_instance = char_class(properties=properties)
+                    # Create characteristic instance with runtime properties from device.
+                    # Some library characteristic classes (e.g. CurrentTimeCharacteristic)
+                    # do not accept 'properties' — fall back to no-arg construction.
+                    try:
+                        char_instance = char_class(properties=properties)
+                    except TypeError:
+                        _LOGGER.debug(
+                            "Characteristic %s does not accept properties kwarg, "
+                            "using no-arg construction",
+                            char_uuid.short_form,
+                        )
+                        char_instance = char_class()
                 else:
                     # Fallback: Create UnknownCharacteristic for unrecognized UUIDs
                     char_info = CharacteristicInfo(

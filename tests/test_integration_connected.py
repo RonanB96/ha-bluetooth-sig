@@ -28,71 +28,39 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.bluetooth_sig_devices.const import DOMAIN
 
 from .bluetooth_helpers import (
+    find_sensor_states as _find_sensor_states,
+)
+from .bluetooth_helpers import (
     inject_bluetooth_service_info,
     load_fixture,
     load_service_info,
     mock_gatt_connection,
 )
+from .conftest import setup_device_entry
 
 # ---------------------------------------------------------------------------
-# Auto-use fixture: disable the infinite GATT poll loop in tests
+# Shared autouse fixtures for integration tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _no_gatt_poll_loop():
-    """Prevent the infinite GATT poll loop from blocking async_block_till_done.
+def expected_lingering_timers() -> bool:
+    """Allow lingering timers from the Bluetooth manager."""
+    return True
 
-    The coordinator's ``_start_gatt_poll_loop`` creates an ``async_create_task``
-    that runs ``while True: sleep(poll_interval)`` — HA's
-    ``async_block_till_done`` tracks these tasks and will never return.
 
-    The *initial* GATT poll (inside ``_async_probe_and_setup``) still runs
-    before this method is called, so entity creation is unaffected.
-    """
+@pytest.fixture(autouse=True)
+def _disable_external_discovery_flows():
+    """Prevent the BluetoothManager from triggering flows for other integrations."""
     with patch(
-        "custom_components.bluetooth_sig_devices.coordinator."
-        "BluetoothSIGCoordinator._start_gatt_poll_loop",
+        "homeassistant.components.bluetooth.manager.discovery_flow.async_create_flow"
     ):
         yield
 
 
 # ---------------------------------------------------------------------------
-# Shared fixtures
+# _run_gatt_probe helper — end-to-end GATT probe + entity creation
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-async def integration_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Set up a real integration config entry for end-to-end tests."""
-    entry = MockConfigEntry(
-        version=1,
-        minor_version=1,
-        domain=DOMAIN,
-        title="Bluetooth SIG Devices",
-        data={},
-        source="user",
-        unique_id=DOMAIN,
-    )
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
-
-
-def _find_sensor_states(
-    hass: HomeAssistant,
-    *,
-    contains: str | None = None,
-    unit: str | None = None,
-) -> list[Any]:
-    """Return sensor states, optionally filtered by entity_id substring or unit."""
-    states = hass.states.async_all("sensor")
-    if contains:
-        states = [s for s in states if contains.lower() in s.entity_id.lower()]
-    if unit:
-        states = [s for s in states if s.attributes.get("unit_of_measurement") == unit]
-    return states
 
 
 async def _run_gatt_probe(
@@ -102,17 +70,31 @@ async def _run_gatt_probe(
 ) -> None:
     """Inject an advert that triggers a GATT probe and wait for entity creation.
 
-    The coordinator populates the GATT cache *before* creating the
-    PassiveBluetoothProcessorCoordinator.  When the PBPC starts, the
-    bluetooth manager replays the last-known advertisement; the cached
-    GATT data is merged into that update and entities are created
-    immediately — no second advertisement is required.
+    Steps:
+    1. Inject advertisement → coordinator schedules GATT probe.
+    2. Probe runs inside ``mock_gatt_connection`` → results stored.
+    3. Create a device config entry → sensor platform creates an ABPC.
+    4. ABPC starts → HA replays the last-known advertisement →
+       ``needs_poll_method`` returns True → ``poll_method`` connects via
+       BLE → reads characteristics → entities are created.
+
+    The ``mock_gatt_connection`` context must wrap both probe and poll
+    because both require an active BLE connection.
     """
+    address = device["address"]
+    name = device.get("name", f"test-device-{address[-5:]}")
     service_info = load_service_info(device, advert)
 
     with mock_gatt_connection(device):
+        # 1. Inject advertisement → coordinator schedules GATT probe
         inject_bluetooth_service_info(hass, service_info)
         await hass.async_block_till_done()
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+        # 2. Create device entry → ABPC starts → poll fires within
+        #    mock_gatt_connection so BLE reads succeed
+        await setup_device_entry(hass, address=address, name=name)
         await hass.async_block_till_done()
         await hass.async_block_till_done()
 
@@ -150,9 +132,9 @@ async def test_connectable_device_triggers_gatt_probe(
         await hass.async_block_till_done()
 
     assert (
-        coordinator._pending_probes
+        coordinator.gatt_manager.pending_probes
         or probes_scheduled
-        or (device["address"] in coordinator._gatt_probe_results)
+        or (device["address"] in coordinator.gatt_manager.probe_results)
     ), "Expected GATT probe to be scheduled for connectable device"
 
 
@@ -182,9 +164,9 @@ async def test_health_monitor_connectable_triggers_probe(
         await hass.async_block_till_done()
 
     assert (
-        coordinator._pending_probes
+        coordinator.gatt_manager.pending_probes
         or probes_scheduled
-        or (device["address"] in coordinator._gatt_probe_results)
+        or (device["address"] in coordinator.gatt_manager.probe_results)
     ), "Expected GATT probe for connectable health monitor"
 
 
@@ -280,10 +262,10 @@ async def test_smart_watch_gatt_probe_device_info_diagnostic(
     address = device["address"]
 
     # Verify the probe completed and found parseable characteristics
-    assert address in coordinator._gatt_probe_results, (
+    assert address in coordinator.gatt_manager.probe_results, (
         f"Expected probe result for {address}"
     )
-    result = coordinator._gatt_probe_results[address]
+    result = coordinator.gatt_manager.probe_results[address]
     # Battery + Current Time + 3 Device Info = 5 parseable
     # (Generic Attribute / Service Changed is excluded)
     assert result.parseable_count >= 2, (
@@ -444,7 +426,7 @@ async def test_mesh_node_gatt_probe_no_parseable_chars(
 async def test_connectable_device_gatt_probe_creates_entities(
     hass: HomeAssistant, integration_entry: MockConfigEntry
 ) -> None:
-    """Pre-seeded GATT probe results → entities created via cached update path."""
+    """Pre-seeded GATT probe results → entities created via poll path."""
     from homeassistant.components.bluetooth.passive_update_processor import (
         PassiveBluetoothDataUpdate,
         PassiveBluetoothEntityKey,
@@ -500,18 +482,27 @@ async def test_connectable_device_gatt_probe_creates_entities(
         )
     )
 
-    coordinator._gatt_probe_results[address] = fake_probe_result
-    coordinator._cached_gatt_updates[address] = fake_gatt_update
+    # Seed probe results so needs_poll returns True
+    coordinator.gatt_manager.probe_results[address] = fake_probe_result
 
-    first_non_synthetic = next(
-        a for a in device["advertisements"] if not a.get("_synthetic")
-    )
-    service_info = load_service_info(device, first_non_synthetic)
-    inject_bluetooth_service_info(hass, service_info)
-    await hass.async_block_till_done()
-    await hass.async_block_till_done()
+    # Mock the poll method to return the pre-built update
+    with patch.object(
+        coordinator.gatt_manager,
+        "async_poll_gatt_with_semaphore",
+        return_value=fake_gatt_update,
+    ):
+        # Create a device entry so the sensor platform registers an ABPC.
+        await setup_device_entry(hass, address=address, name=device["name"])
 
-    assert address in coordinator._processor_coordinators, (
+        first_non_synthetic = next(
+            a for a in device["advertisements"] if not a.get("_synthetic")
+        )
+        service_info = load_service_info(device, first_non_synthetic)
+        inject_bluetooth_service_info(hass, service_info)
+        await hass.async_block_till_done()
+        await hass.async_block_till_done()
+
+    assert address in coordinator.processor_coordinators, (
         f"Expected processor coordinator for {address}, "
-        f"existing: {list(coordinator._processor_coordinators)}"
+        f"existing: {list(coordinator.processor_coordinators)}"
     )

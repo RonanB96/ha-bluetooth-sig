@@ -1,4 +1,8 @@
-"""Device validation for Bluetooth SIG Devices integration."""
+"""Device validation for Bluetooth SIG Devices integration.
+
+Provides BLE address classification (public / random-static / RPA / NRPA)
+and the ``GATTProbeResult`` data container used by the GATT manager.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +10,113 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from bluetooth_sig.core.translator import BluetoothSIGTranslator
-from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.types.uuid import BluetoothUUID
+
+from .const import STATIC_ADDRESS_TYPES, BLEAddressType
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# BLE address classification
+# ---------------------------------------------------------------------------
+
+
+def _classify_random_address(address: str) -> BLEAddressType:
+    """Classify a random BLE address sub-type from the first octet.
+
+    Per the Bluetooth Core Spec (Vol 6, Part B, §1.3) the two
+    most-significant bits of the first MAC octet determine the sub-type:
+
+    - ``11`` (0xC0–0xFF) → Random Static
+    - ``01`` (0x40–0x7F) → Resolvable Private (RPA)
+    - ``00`` (0x00–0x3F) → Non-Resolvable Private (NRPA)
+    - ``10`` (0x80–0xBF) → Reserved
+    """
+    try:
+        first_byte = int(address.split(":")[0], 16)
+    except (ValueError, IndexError):
+        return BLEAddressType.UNKNOWN
+
+    top_bits = (first_byte >> 6) & 0x03
+    if top_bits == 0b11:  # 0xC0-0xFF
+        return BLEAddressType.RANDOM_STATIC
+    if top_bits == 0b01:  # 0x40-0x7F
+        return BLEAddressType.RESOLVABLE_PRIVATE
+    if top_bits == 0b00:  # 0x00-0x3F
+        return BLEAddressType.NON_RESOLVABLE_PRIVATE
+    # 0b10 is reserved in the BLE spec
+    return BLEAddressType.UNKNOWN
+
+
+# ESPHome proxy ``address_type`` integer values
+# (from aioesphomeapi / bleak-esphome).
+_ESPHOME_ADDRESS_TYPE_RANDOM = 1
+
+
+def classify_ble_address(
+    service_info: BluetoothServiceInfoBleak,
+) -> BLEAddressType:
+    """Classify a BLE address as public, random-static, RPA, NRPA, or unknown.
+
+    Checks two metadata formats:
+
+    1. **BlueZ** (native Linux adapter):
+       ``device.details["props"]["AddressType"]`` → ``"public"`` / ``"random"``
+    2. **ESPHome Bluetooth proxy** (via bleak-esphome):
+       ``device.details["address_type"]`` → ``0`` (public) / ``1`` (random)
+
+    If the address is reported as random, the two most-significant bits of
+    the first MAC octet determine the sub-type per the Bluetooth Core Spec
+    (Vol 6, Part B, §1.3).
+
+    When neither metadata format is present (e.g. test mocks) the function
+    returns ``UNKNOWN`` which is treated as stable by callers.
+    """
+    device = service_info.device
+
+    is_random = False
+
+    if hasattr(device, "details") and isinstance(device.details, dict):
+        details: dict = device.details
+
+        # --- BlueZ format: {"props": {"AddressType": "random"|"public"}} ---
+        props = details.get("props", {})
+        if isinstance(props, dict):
+            addr_type_str = props.get("AddressType", "")
+            if addr_type_str == "random":
+                is_random = True
+            elif addr_type_str == "public":
+                return BLEAddressType.PUBLIC
+
+        # --- ESPHome proxy format: {"address_type": 0|1} ---
+        if not is_random and "address_type" in details:
+            esphome_addr_type = details["address_type"]
+            if esphome_addr_type == _ESPHOME_ADDRESS_TYPE_RANDOM:
+                is_random = True
+            else:
+                # ESPHome reports public (0)
+                return BLEAddressType.PUBLIC
+
+    if not is_random:
+        # No metadata (mock, unknown backend) — conservatively assume stable.
+        return BLEAddressType.UNKNOWN
+
+    # Random address — classify sub-type from the first octet.
+    return _classify_random_address(service_info.address)
+
+
+def is_static_address(service_info: BluetoothServiceInfoBleak) -> bool:
+    """Return True if the device has a static (trackable) BLE address.
+
+    Static addresses include Public, Random Static, and Unknown (when
+    BlueZ metadata is not available we assume the address is stable).
+    Resolvable Private and Non-Resolvable Private addresses are rejected.
+    """
+    return classify_ble_address(service_info) in STATIC_ADDRESS_TYPES
 
 
 @dataclass
@@ -32,232 +135,3 @@ class GATTProbeResult:
     def has_support(self) -> bool:
         """Check if device has any parseable characteristics."""
         return self.parseable_count > 0
-
-
-class DeviceValidator:
-    """Validates if a BLE device should be tracked by this integration.
-
-    This class determines whether a discovered Bluetooth device has data
-    that can be parsed by the bluetooth-sig-python library, either from
-    advertisement data or GATT characteristics.
-    """
-
-    def __init__(self, translator: BluetoothSIGTranslator) -> None:
-        """Initialize the device validator.
-
-        Args:
-            translator: BluetoothSIGTranslator instance for parsing
-
-        """
-        self.translator = translator
-        self._registry = CharacteristicRegistry
-
-    def should_track_device(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-        gatt_probe_result: GATTProbeResult | None = None,
-    ) -> tuple[bool, str]:
-        """Determine if device should be tracked.
-
-        Checks both advertisement data and GATT capabilities (if available)
-        to determine if the device has any data we can parse.
-
-        Args:
-            service_info: Bluetooth service info from Home Assistant
-            gatt_probe_result: GATT probe result (optional)
-
-        Returns:
-            Tuple of (should_track, reason)
-
-        """
-        address = service_info.address
-
-        # First check advertisement data
-        if self._has_parseable_advert_data(service_info):
-            _LOGGER.debug(
-                "Device %s has parseable advertisement data",
-                address,
-            )
-            return True, "Parseable advertisement data"
-
-        # Check interpreted manufacturer data
-        if self._has_interpreted_manufacturer_data(service_info):
-            _LOGGER.debug(
-                "Device %s has interpreted manufacturer data",
-                address,
-            )
-            return True, "Interpreted manufacturer data"
-
-        # If we have GATT probe result, check those
-        if gatt_probe_result and gatt_probe_result.parseable_count > 0:
-            _LOGGER.debug(
-                "Device %s has %d parseable GATT characteristics",
-                address,
-                gatt_probe_result.parseable_count,
-            )
-            return (
-                True,
-                f"{gatt_probe_result.parseable_count} parseable GATT characteristics",
-            )
-
-        _LOGGER.debug(
-            "Device %s has no supported data",
-            address,
-        )
-        return False, "No supported data found"
-
-    def _has_parseable_advert_data(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-    ) -> bool:
-        """Check if advertisement contains parseable SIG service data.
-
-        Args:
-            service_info: Bluetooth service info
-
-        Returns:
-            True if any service data UUID is a known SIG characteristic
-
-        """
-        if not service_info.service_data:
-            return False
-
-        for uuid_str in service_info.service_data:
-            try:
-                uuid = BluetoothUUID(uuid_str)
-                char_class = self._registry.get_characteristic_class_by_uuid(uuid)
-                if char_class is not None:
-                    _LOGGER.debug(
-                        "Found parseable service data UUID: %s",
-                        uuid.short_form,
-                    )
-                    return True
-            except (ValueError, TypeError):
-                continue
-
-        return False
-
-    def _has_interpreted_manufacturer_data(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-    ) -> bool:
-        """Check if manufacturer data can be interpreted by the library.
-
-        Args:
-            service_info: Bluetooth service info
-
-        Returns:
-            True if manufacturer data can be parsed
-
-        """
-        if not service_info.manufacturer_data:
-            return False
-
-        # Import here to avoid circular imports
-        from .device_adapter import HomeAssistantBluetoothAdapter
-
-        try:
-            advertisement = HomeAssistantBluetoothAdapter.convert_advertisement(
-                service_info
-            )
-            return advertisement.interpreted_data is not None
-        except Exception:
-            return False
-
-    def get_supported_characteristic_uuids(
-        self,
-        discovered_uuids: list[BluetoothUUID],
-    ) -> list[BluetoothUUID]:
-        """Filter discovered UUIDs to only those we can parse.
-
-        Args:
-            discovered_uuids: List of discovered characteristic UUIDs
-
-        Returns:
-            List of UUIDs that have parsers in the library
-
-        """
-        supported = []
-        for uuid in discovered_uuids:
-            char_class = self._registry.get_characteristic_class_by_uuid(uuid)
-            if char_class is not None:
-                supported.append(uuid)
-        return supported
-
-    def get_characteristic_info(
-        self,
-        uuid: BluetoothUUID,
-    ) -> tuple[str, str | None] | None:
-        """Get characteristic name and unit from the library.
-
-        Args:
-            uuid: Characteristic UUID
-
-        Returns:
-            Tuple of (name, unit) or None if not found
-
-        """
-        char_class = self._registry.get_characteristic_class_by_uuid(uuid)
-        if char_class is None:
-            return None
-
-        char_instance = char_class()
-        return char_instance.name, char_instance.unit
-
-    def should_probe_device(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-        already_tracked_addresses: set[str],
-        custom_device_addresses: set[str],
-        cached_capabilities_addresses: set[str],
-    ) -> tuple[bool, str]:
-        """Determine if a device should be probed for GATT capabilities.
-
-        Args:
-            service_info: Bluetooth service info
-            already_tracked_addresses: Set of addresses already being tracked
-            custom_device_addresses: Set of user-configured custom device addresses
-            cached_capabilities_addresses: Set of addresses with cached capabilities
-
-        Returns:
-            Tuple of (should_probe, reason)
-
-        """
-        address = service_info.address
-        address_upper = address.upper()
-
-        # Always probe custom devices
-        if address_upper in custom_device_addresses:
-            return True, "Custom device configured by user"
-
-        # Must be connectable
-        if not service_info.connectable:
-            return False, "Device is not connectable"
-
-        # Don't probe if we already have capabilities
-        if address in cached_capabilities_addresses:
-            return False, "Capabilities already cached"
-
-        # Don't probe if already tracked via advertisements
-        if address in already_tracked_addresses:
-            # But check if we should add GATT polling for additional data
-            # For now, skip if already tracked
-            return False, "Already tracked via advertisements"
-
-        # Probe connectable devices that we don't have info for
-        return True, "Connectable device without cached capabilities"
-
-
-def create_validator(translator: BluetoothSIGTranslator) -> DeviceValidator:
-    """Create a DeviceValidator instance.
-
-    Factory function for creating validators.
-
-    Args:
-        translator: BluetoothSIGTranslator instance
-
-    Returns:
-        DeviceValidator instance
-
-    """
-    return DeviceValidator(translator)

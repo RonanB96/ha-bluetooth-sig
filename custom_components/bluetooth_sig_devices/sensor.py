@@ -14,6 +14,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import _is_hub_entry
 from .coordinator import BluetoothSIGCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,16 +27,22 @@ async def async_setup_entry(
 ) -> None:
     """Set up Bluetooth SIG sensor platform.
 
-    Registers the entity adder with the coordinator so that new devices
-    discovered via Bluetooth will automatically have sensors created.
+    Hub entries (no ``address`` in data) have no sensors.
+    Device entries create a PassiveBluetoothProcessorCoordinator via the
+    shared hub coordinator.
     """
+    # Hub entry — no sensors
+    if _is_hub_entry(entry):
+        return
+
     coordinator: BluetoothSIGCoordinator = entry.runtime_data
+    address: str = entry.data["address"]
 
-    # Register entity creation callback with coordinator
-    # The coordinator will call async_add_entities when new devices are discovered
-    coordinator.set_entity_adder(async_add_entities, BluetoothSIGSensorEntity)
+    coordinator.create_device_processor(
+        address, entry, async_add_entities, BluetoothSIGSensorEntity
+    )
 
-    _LOGGER.info("Bluetooth SIG sensor platform registered for auto-discovery")
+    _LOGGER.info("Bluetooth SIG sensor platform set up for device %s", address)
 
 
 class BluetoothSIGSensorEntity(

@@ -4,68 +4,42 @@ applyTo: '**'
 
 # Bluetooth SIG Devices — AI Agent Instructions
 
-Home Assistant custom integration for automatic Bluetooth sensor creation using the `bluetooth-sig-python` library.
+Home Assistant custom integration for automatic Bluetooth sensor creation using the `bluetooth-sig-python` library. Parses standard Bluetooth SIG GATT characteristics and manufacturer data — **no hardcoded maps, fully library-driven**.
 
 ## Table of Contents
-- [Architecture Overview](#architecture-overview)
+
+- [Architecture](#architecture)
 - [Component Responsibilities](#component-responsibilities)
-- [Implementation Patterns](#implementation-patterns)
-- [Development Workflow](#development-workflow)
-- [Testing](#testing)
+- [Key Patterns](#key-patterns)
+- [Code Style](#code-style)
+- [Build and Test](#build-and-test)
+- [Constraints](#constraints)
 - [Common Tasks](#common-tasks)
-- [Constraints and Requirements](#constraints-and-requirements)
-- [Troubleshooting](#troubleshooting)
 
 ---
 
-## Architecture Overview
+## Architecture
 
-**Design Principle**: Single config entry with continuous auto-discovery of ALL Bluetooth devices. This is NOT a per-device config entry integration.
+### Two-Tier Config Entry Pattern
 
-### Similar HA Integrations (Reference Implementations)
+**Not** a single-config-entry integration. Uses hub entry (no `address`, `unique_id=DOMAIN`) for the global BLE scanner + coordinator, plus per-device entries (`{"address": "AA:BB:..."}`, `unique_id=address`) created via `discovery_flow`. `_is_hub_entry(entry)` checks `"address" not in entry.data`.
 
-This integration follows patterns established by other HA Bluetooth integrations with similar use cases:
+**Discovery:** Coordinator detects supported device → `discovery_flow.async_create_flow(source="integration_discovery")` → user confirms → device config entry → sensor platform calls `create_device_processor()`.
 
-| Integration | Pattern | Source Reference |
-|-------------|---------|------------------|
-| **iBeacon** | Single config + global callback + dispatcher signals | `homeassistant/components/ibeacon/coordinator.py` |
-| **private_ble_device** | Single config + `BluetoothCallbackMatcher(connectable=False)` | `homeassistant/components/private_ble_device/coordinator.py` |
-| **ble_monitor** (HACS) | Single config + passive scanning for any advertisement | Similar community approach |
-
-**Why this pattern (not per-device config entries):**
-- Cannot predefine bluetooth matchers in `manifest.json` — supported devices are determined at runtime by library parsing success
-- Would require user to manually confirm each device — impractical for environments with many BLE devices
-- iBeacon integration faces same challenge: any device could be an iBeacon, discovered at runtime
+**Reference integrations:** iBeacon, private_ble_device — same hub + `BluetoothCallbackMatcher(connectable=False)` pattern. Needed because supported devices are determined at runtime by library parsing success.
 
 ### Data Flow
 
-```
-1. Integration Setup
-   __init__.py → creates BluetoothSIGCoordinator
-   sensor.py → registers entity_adder callback with coordinator
+`__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `_ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `update_device()` → `_build_passive_bluetooth_update()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
 
-2. Continuous Discovery (coordinator.async_start)
-   bluetooth.async_register_callback(BluetoothCallbackMatcher(connectable=False))
-       ↓ every BLE advertisement (connectable AND non-connectable)
-   _async_device_discovered(service_info)
-       ↓ first time seeing this address?
-   _has_supported_data(service_info)  ← filters unsupported devices
-       ↓ has parseable GATT service data or interpretable manufacturer data?
-   _ensure_device_processor(address)
-       ↓
-   PassiveBluetoothProcessorCoordinator (one per device address)
-       ↓
-   update_device() → _build_passive_bluetooth_update()
-       ↓
-   PassiveBluetoothDataUpdate → BluetoothSIGSensorEntity created
-```
+### Two Independent Data Paths
 
-### Why This Architecture
+1. **Advertisement path** (passive) — broadcast service data UUIDs and manufacturer data, handled by the coordinator's `update_method` callback
+2. **GATT path** (active) — characteristic reading via BLE connection, handled by the coordinator's `poll_method` async callback
 
-- **No manifest matchers**: Cannot predefine supported devices; support determined at runtime by library parsing success
-- **Single config entry**: User enables once, all compatible devices auto-discovered
-- **Dynamic processor creation**: New devices appearing after setup are automatically tracked
-- **Library-driven metadata**: Entity names, units, and parsing come from `bluetooth-sig-python`, not hardcoded maps
+Both paths are completely separate and independent. Each produces `PassiveBluetoothDataUpdate` objects that the `ActiveBluetoothProcessorCoordinator` merges via `PassiveBluetoothDataUpdate.update()`. The GATT poll is triggered by advertisement events when `needs_poll_method` returns True (probe results exist and `poll_age >= poll_interval`).
+
+**Reference integrations:** OralB, Xiaomi BLE — same `ActiveBluetoothProcessorCoordinator` + `needs_poll_method` / `poll_method` pattern.
 
 ---
 
@@ -73,250 +47,126 @@ This integration follows patterns established by other HA Bluetooth integrations
 
 | File | Responsibility |
 |------|----------------|
-| `__init__.py` | Entry point; creates coordinator; forwards to platforms; handles unload |
-| `coordinator.py` | Global discovery callback; per-device processor management; builds `PassiveBluetoothDataUpdate` |
-| `device_adapter.py` | Converts HA `BluetoothServiceInfoBleak` → library `AdvertisementData` |
-| `sensor.py` | Registers entity adder; defines `BluetoothSIGSensorEntity` class |
-| `config_flow.py` | Single-instance config flow; checks Bluetooth availability |
-| `const.py` | Only `DOMAIN = "bluetooth_sig_devices"` |
+| `__init__.py` | Dispatches hub vs device setup; creates coordinator; forwards to `PLATFORMS = [Platform.SENSOR]`; handles unload and device removal |
+| `coordinator.py` | Orchestrates BLE discovery, processor lifecycle, update pipeline; delegates to sub-managers |
+| `advertisement_manager.py` | `AdvertisementManager` — advertisement conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking state, RSSI, callbacks, manufacturer/model extraction |
+| `support_detector.py` | `SupportDetector` — determines if a BLE device has parseable SIG data; characteristic tracking and summary building |
+| `entity_builder.py` | Stateless entity construction from parsed bluetooth-sig library data; role gating; value coercion (`to_ha_state`) |
+| `entity_metadata.py` | Pure-function entity metadata resolution: unit→device class mapping, UUID normalisation, field unit lookup |
+| `gatt_manager.py` | `GATTManager` — GATT probing and on-demand characteristic reading; concurrency semaphore; no longer owns polling lifecycle |
+| `discovery_tracker.py` | `DiscoveryTracker` — seen/rejected/stale device tracking, LRU eviction, cleanup timer |
+| `device_adapter.py` | `HomeAssistantBluetoothAdapter` — `ClientManagerProtocol` impl; GATT connection lifecycle and I/O; delegates advertisement conversion to `AdvertisementManager` |
+| `device_validator.py` | BLE address classification (`classify_ble_address`, `is_static_address`); `GATTProbeResult` dataclass |
+| `sensor.py` | Entity adder via `create_device_processor()`; `BluetoothSIGSensorEntity` with availability logging |
+| `config_flow.py` | Hub step, YAML import, integration_discovery confirm; `OptionsFlow` for poll_interval |
+| `diagnostics.py` | Device statistics via coordinator's public `get_diagnostics_snapshot()` API |
+| `const.py` | Domain, config keys, timeouts, probe limits, BLE address types |
 
 ---
 
-## Implementation Patterns
+## Key Patterns
 
-### Global Discovery Registration
-
-The coordinator registers for ALL Bluetooth advertisements using `connectable=False`:
-
-```python
-# In coordinator.async_start()
-# CRITICAL: connectable=False matches ALL devices (both connectable and non-connectable)
-# Using None or {} defaults to connectable=True which misses passive BLE devices!
-# Reference: homeassistant/components/bluetooth/manager.py lines 208-227
-self._cancel_discovery = bluetooth.async_register_callback(
-    self.hass,
-    self._async_device_discovered,
-    BluetoothCallbackMatcher(connectable=False),
-    BluetoothScanningMode.PASSIVE,
-)
-```
-
-**Why `connectable=False`?**
-- When matcher is `None`, HA defaults to `connectable=True` (see `manager.py`)
-- `connectable=False` receives ALL advertisements (connectable AND non-connectable)
-- This is the same pattern used by `ibeacon` and `private_ble_device` integrations
-
-### Device Filtering with `_has_supported_data()`
-
-Not all Bluetooth devices have data we can parse. The `_has_supported_data()` method filters:
-
-```python
-def _has_supported_data(self, service_info) -> bool:
-    # Check 1: Service data with known GATT characteristic UUID
-    if service_info.service_data:
-        for uuid_str in service_info.service_data:
-            if translator.get_characteristic_info_by_uuid(uuid_str):
-                return True  # Known standard characteristic
-
-    # Check 2: Manufacturer data the library can interpret
-    if service_info.manufacturer_data:
-        advertisement = convert_advertisement(service_info)
-        if advertisement.interpreted_data is not None:
-            return True  # Library recognized this format
-
-    return False  # Unsupported device, skip
-```
-
-### Per-Device Processor Creation
-
-When `_ensure_device_processor()` sees a new address:
-
-1. Creates `PassiveBluetoothProcessorCoordinator` bound to that address
-2. Creates `PassiveBluetoothDataProcessor` with passthrough lambda
-3. Registers entity listener via `processor.async_add_entities_listener()`
-4. Starts the processor coordinator
-5. Stores in `self._processor_coordinators[address]`
-
-### Entity Metadata from Library
-
-Never hardcode entity properties. Use library metadata:
-
-- `char_instance.name` → entity name
-- `char_instance.unit` → `native_unit_of_measurement`
-- `char_instance.value_type` → determines parsing path
-- `data.parsed_value` → entity state
-
-### ValueType Handling
-
-In `_add_sig_characteristic_entity()`, route by `ValueType`:
-
-| ValueType | Handler | Creates |
-|-----------|---------|---------|
-| `INT`, `FLOAT` | `_add_simple_entity()` | Single numeric sensor |
-| `STRING` | `_add_simple_entity()` | Single text sensor |
-| `VARIOUS`, `BITFIELD` | `_add_struct_entities()` | Multiple sensors from struct fields |
-
-### Struct Field Extraction
-
-For complex types, iterate `__struct_fields__` (msgspec Struct attribute):
-
-```python
-for field_name in struct_value.__struct_fields__:
-    field_value = getattr(struct_value, field_name)
-    if isinstance(field_value, (int, float, str, bool)):
-        # Create entity for this field
-```
+- **Global discovery:** `BluetoothCallbackMatcher(connectable=False)` + `PASSIVE` scanning — `connectable=False` receives ALL adverts (connectable and non-connectable); default `None` misses passive devices
+- **Role-based entity gating:** `MEASUREMENT`/`UNKNOWN` → normal entity; `STATUS`/`INFO` → `EntityCategory.DIAGNOSTIC`; `CONTROL`/`FEATURE` → skipped (`SKIP_ROLES` in `entity_builder`)
+- **Value routing:** Primitives → `add_simple_entity()`; msgspec Structs → `add_struct_entities()` with recursion and field-name prefixes; per-field units via `resolve_field_unit()` → GSS `FieldSpec.unit_id` → `UnitsRegistry`
+- **Value coercion** (`to_ha_state` in `entity_builder`): `bool` → `bool`, `IntFlag` → `int`, `enum` → `.name`, primitives pass through, fallback → `str()`
+- **Device class resolution:** `UNIT_TO_DEVICE_CLASS` dict in `entity_metadata`; disambiguates `"%"` by name (battery vs humidity); `CUMULATIVE_FIELD_NAMES` → `TOTAL_INCREASING`
+- **Entity metadata always from library:** `char_instance.name`, `.unit`, `data.parsed_value`, `spec.primary_field` — never hardcode
+- **GATT probe/poll:** `GATTManager.async_probe_device()` → `GATTProbeResult`; `async_probe_and_setup()` with semaphore; `async_poll_gatt_with_semaphore()` called by `ActiveBluetoothProcessorCoordinator`'s `poll_method` closure. Polling lifecycle owned by the framework, not `GATTManager`.
+- **Discovery tracking:** `DiscoveryTracker` manages seen/rejected/stale device sets with LRU eviction and periodic cleanup
+- **Advertisement management:** `AdvertisementManager` owns conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking, RSSI, callbacks; composed into `HomeAssistantBluetoothAdapter`; static helpers `get_manufacturer_name`/`get_model_name` used by coordinator
+- **Support detection:** `SupportDetector` consolidates checking service data, manufacturer data, and GATT probes; produces `CharacteristicInfo` lists and summaries; composed into coordinator
+- **Registry pre-warming:** `prewarm_registries()` static method run in executor during setup
+- **No RSSI entities** — handled by other BLE monitor integrations
+- **BLE address classification:** `classify_ble_address()` in `device_validator.py` checks **two metadata formats**: (1) BlueZ native: `device.details["props"]["AddressType"]` → `"public"`/`"random"`, (2) ESPHome proxy (via bleak-esphome): `device.details["address_type"]` → `0` (public) / `1` (random). Random addresses are sub-classified by top 2 bits of the first MAC octet per BT Core Spec §1.3. RPA (0x40–0x7F) and NRPA (0x00–0x3F) are filtered as ephemeral; Public, Random Static (0xC0–0xFF), and Unknown (no metadata) are treated as stable.
+- **Public diagnostics API:** `coordinator.get_diagnostics_snapshot()` returns all diagnostic data; `coordinator.is_device_active()` checks processor status
 
 ---
 
-## Development Workflow
+## Code Style
 
-### Environment Setup
+- Python ≥3.12; uses `type` alias syntax (`type BluetoothSIGConfigEntry = ConfigEntry[...]`)
+- Ruff: rules E, W, F, I, UP, B, C4, SIM; line-length 88; ignores E501
+- mypy strict mode
+- UK English in user-facing strings ("recognised" not "recognized")
+- `UPPER_SNAKE_CASE` constants; `frozenset` for immutable sets
+- `_` prefix for private methods; `async_` prefix for async methods
+- `@callback` decorator for synchronous HA event loop callbacks
 
-```bash
-# 1. Create virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+---
 
-# 2. Install with all dependencies
-pip install -e ".[test,dev]"
-
-# 3. Install HA test dependency (often missing)
-pip install aiousbwatcher
-```
-
-### Code Quality
+## Build and Test
 
 ```bash
-# Lint and format
-ruff check . --fix
-ruff format .
+# Setup
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[test,dev]" && pip install aiousbwatcher
 
-# Type checking
+# Lint, format, type-check
+ruff check . --fix && ruff format .
 mypy custom_components/bluetooth_sig_devices
-```
 
-### Running Tests
-
-```bash
-# All tests
+# Tests
 pytest tests/ -v
-
-# Specific file
-pytest tests/test_coordinator.py -v
-
-# With coverage
 pytest tests/ --cov=custom_components/bluetooth_sig_devices --cov-report=term-missing
 ```
 
+### Live HA Debugging
+
+The HA instance runs in a supervised Docker environment. **Always read real logs before diagnosing issues** — never guess at root causes.
+
+```bash
+# Read recent HA Core logs (primary debugging command)
+ha core logs
+ha core logs --lines 5000
+
+# Filter for this integration's log lines
+ha core logs 2>&1 | grep -i "bluetooth_sig_devices"
+ha core logs --lines 5000 2>&1 | grep -i "bluetooth_sig" | grep -iE "firing|discovery|flow|trigger"
+
+# Restart HA Core after code changes (picks up custom_components)
+ha core restart
+
+# HA config directory (configuration.yaml, custom_components symlink, etc.)
+# Location: /homeassistant/
+
+# Execute commands inside the HA Core Docker container
+docker exec homeassistant <command>
+# e.g. check installed package versions:
+docker exec homeassistant pip show bleak-esphome
+```
+
+**Key log namespaces to filter:**
+- `habluetooth.wrappers` — BLE connection path selection (upstream)
+
+### Test Tiers
+
+1. **Unit** (`test_coordinator.py`, `test_sensor.py`, `test_device_adapter.py`) — direct class instantiation with `MagicMock`
+2. **Config flow** (`test_config_flow.py`, `test_discovery_flow.py`) — `mock_bluetooth_disabled` or `enable_bluetooth`
+3. **Integration/advertising** (`test_integration_advertising.py`) — `enable_bluetooth` + `inject_bluetooth_service_info` + fixture replay
+4. **Integration/GATT** (`test_integration_connected.py`) — `mock_gatt_connection`; autouse fixture patches `ActiveBluetoothProcessorCoordinator`
+
+Key test helpers in `tests/bluetooth_helpers.py`: `load_fixture()`, `load_service_info()`, `iter_service_infos()`, `inject_bluetooth_service_info()`, `build_mock_bleak_client()`, `mock_gatt_connection()`. JSON fixtures in `tests/fixtures/` are real ESPHome BLE advertisement captures.
+
 ---
 
-## Testing
+## Constraints
 
-### Test Framework
-
-Uses `pytest-homeassistant-custom-component` — provides HA test fixtures without full installation.
-
-### Key Fixtures in `conftest.py`
-
-| Fixture | Purpose |
-|---------|---------|
-| `mock_bluetooth_setup` | Mocks `bluetooth.async_setup`, `async_scanner_count` |
-| `mock_bluetooth_service_info_battery` | `BluetoothServiceInfoBleak` with Battery Level UUID (0x2A19) |
-| `mock_bluetooth_service_info_temperature` | `BluetoothServiceInfoBleak` with Temperature UUID (0x2A6E) |
-
-### Test Patterns
-
-1. **Unit tests**: Test `coordinator.update_device()` with mock `BluetoothServiceInfoBleak`
-2. **Integration tests**: Test full setup via `hass.config_entries.async_setup()`
-3. **Adapter tests**: Test `HomeAssistantBluetoothAdapter.convert_advertisement()`
-
-### Live Testing
-
-See `tests/TESTING.md` for methods:
-- Copy to test HA instance
-- Symlink for development
-- DevContainer setup
+| Constraint | Value |
+|------------|-------|
+| Python | ≥3.12 |
+| Home Assistant | ≥2026.1.0 |
+| Config entries | Hub + N device entries (no `single_config_entry`) |
+| Scanning mode | `BluetoothScanningMode.PASSIVE` |
+| GATT probe concurrency | 2 (`MAX_CONCURRENT_PROBES`) |
+| GATT poll interval | 30–86400s (default 300s) |
+| Dependencies | `bluetooth-sig>=0.2.0`, `bleak-retry-connector>=3.0.0`, `homeassistant.components.bluetooth` |
 
 ---
 
 ## Common Tasks
 
-### Adding Support for New Characteristic Types
-
-No code changes needed in this integration. Add parser to `bluetooth-sig-python` library; this integration picks it up automatically via `CharacteristicRegistry`.
-
-### Adding Per-Device Configuration
-
-Future pattern for bind keys, etc.:
-
-1. Store in `entry.options` keyed by device address
-2. Access in `_ensure_device_processor()` or `update_device()`
-3. Add options flow for UI configuration
-
-### Debugging Device Discovery
-
-Enable debug logging:
-
-```yaml
-logger:
-  logs:
-    custom_components.bluetooth_sig_devices: debug
-```
-
-Check logs for:
-- `"Creating processor coordinator for new device %s"` — new device detected
-- `"Now tracking Bluetooth device %s"` — processor started
-- `"Processing device %s"` — advertisement received
-
----
-
-## Constraints and Requirements
-
-| Constraint | Value | Source |
-|------------|-------|--------|
-| Python version | ≥3.12 | `pyproject.toml` |
-| Home Assistant version | ≥2026.1.0 | `hacs.json` |
-| Config entries | Single instance only | `manifest.json` `single_config_entry: true` |
-| Scanning mode | Passive | `BluetoothScanningMode.PASSIVE` |
-| GATT polling | Not implemented | TODO in `device_adapter.py` |
-
-### Dependencies
-
-- `bluetooth-sig-python` — Core parsing library (git dependency)
-- `homeassistant.components.bluetooth` — HA Bluetooth integration
-- `pytest-homeassistant-custom-component` — Test framework (dev only)
-
----
-
-## Troubleshooting
-
-### No Devices Discovered
-
-1. Verify Bluetooth scanner available: Check `bluetooth.async_scanner_count(hass, connectable=False) > 0`
-2. Check sensor platform registered: Look for log `"Entity adder registered for sensor platform"`
-3. Verify discovery started: Look for log `"Bluetooth SIG coordinator started"`
-
-### Entities Not Created
-
-1. Check library parsing: Add debug logging in `_build_passive_bluetooth_update()`
-2. Verify `interpreted_data` or `service_data` present in advertisement
-3. Check `CharacteristicRegistry.get_characteristic_class_by_uuid()` returns a class
-
-### Integration Won't Load
-
-1. Check `ConfigEntryNotReady` for Bluetooth unavailable
-2. Verify `single_instance_allowed` not blocking reinstall
-3. Check HA logs for import errors in dependencies
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `ha_plan.md` | Implementation rationale and design decisions |
-| `README.md` | User-facing documentation |
-| `tests/conftest.py` | Mock BLE fixtures with example service data |
-| `tests/TESTING.md` | Live testing methods |
-| `pyproject.toml` | Dependencies, linting config, test settings |
+- **New characteristic support:** No changes here — add parser in `bluetooth-sig-python`; picked up automatically via `CharacteristicRegistry`
+- **New platform** (e.g., `binary_sensor`): Add to `PLATFORMS` in `__init__.py`, create platform file following `sensor.py`, extend `_build_passive_bluetooth_update()` in coordinator
+- **Debug logging:** Set `custom_components.bluetooth_sig_devices: debug` and `bluetooth_sig: debug` in HA logger config
+- **Key references:** `ha_plan.md` (design rationale), `tests/conftest.py` (fixtures), `tests/bluetooth_helpers.py` (BLE injection), `tests/fixtures/` (captures), `quality_scale.yaml` (HA quality tracking)

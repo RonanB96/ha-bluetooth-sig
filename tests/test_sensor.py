@@ -3,8 +3,14 @@
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
+from homeassistant.core import HomeAssistant
 
-from custom_components.bluetooth_sig_devices.sensor import BluetoothSIGSensorEntity
+from custom_components.bluetooth_sig_devices.sensor import (
+    BluetoothSIGSensorEntity,
+    async_setup_entry,
+)
+
+from .conftest import DEVICE_ADDRESS, make_device_entry, make_hub_entry
 
 
 class TestBluetoothSIGSensorEntityAvailable:
@@ -45,7 +51,8 @@ class TestBluetoothSIGSensorEntityAvailable:
         self, entity: BluetoothSIGSensorEntity, caplog: pytest.LogCaptureFixture
     ) -> None:
         """First unavailability is logged and flag is set."""
-        result = self._call_available(entity, parent_available=False)
+        with caplog.at_level("INFO"):
+            result = self._call_available(entity, parent_available=False)
 
         assert result is False
         assert entity._unavailable_logged is True  # noqa: SLF001
@@ -69,7 +76,8 @@ class TestBluetoothSIGSensorEntityAvailable:
         """Recovery from unavailable logs 'back online' and resets the flag."""
         entity._unavailable_logged = True  # noqa: SLF001  # simulate prior unavailability
 
-        result = self._call_available(entity, parent_available=True)
+        with caplog.at_level("INFO"):
+            result = self._call_available(entity, parent_available=True)
 
         assert result is True
         assert entity._unavailable_logged is False  # noqa: SLF001
@@ -91,15 +99,18 @@ class TestBluetoothSIGSensorEntityAvailable:
         self, entity: BluetoothSIGSensorEntity, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Available → unavailable → available logs correct messages in order."""
-        self._call_available(entity, parent_available=True)
+        with caplog.at_level("INFO"):
+            self._call_available(entity, parent_available=True)
         assert entity._unavailable_logged is False  # noqa: SLF001
 
-        self._call_available(entity, parent_available=False)
+        with caplog.at_level("INFO"):
+            self._call_available(entity, parent_available=False)
         assert entity._unavailable_logged is True  # noqa: SLF001
         assert "unavailable" in caplog.text
 
         caplog.clear()
-        self._call_available(entity, parent_available=True)
+        with caplog.at_level("INFO"):
+            self._call_available(entity, parent_available=True)
         assert entity._unavailable_logged is False  # noqa: SLF001
         assert "back online" in caplog.text
 
@@ -143,3 +154,40 @@ class TestBluetoothSIGSensorEntityNativeValue:
         """Arbitrary objects are not returned — None is returned instead."""
         entity = self._make_entity_with_value(object())
         assert entity.native_value is None
+
+
+class TestSensorPlatformGating:
+    """Verify that entities are created only for per-device entries."""
+
+    async def test_hub_entry_creates_no_entities(
+        self,
+        hass: HomeAssistant,
+    ) -> None:
+        """The sensor platform returns early for hub entries — no entities."""
+        hub = make_hub_entry()
+        hub.add_to_hass(hass)
+
+        mock_async_add = MagicMock()
+
+        await async_setup_entry(hass, hub, mock_async_add)
+
+        # No entities added
+        mock_async_add.assert_not_called()
+
+    async def test_device_entry_creates_processor(
+        self,
+        hass: HomeAssistant,
+    ) -> None:
+        """A per-device entry calls create_device_processor on the coordinator."""
+        # Set up a mock coordinator on runtime_data
+        mock_coordinator = MagicMock()
+        dev = make_device_entry()
+        dev.add_to_hass(hass)
+        dev.runtime_data = mock_coordinator
+
+        mock_async_add = MagicMock()
+        await async_setup_entry(hass, dev, mock_async_add)
+
+        mock_coordinator.create_device_processor.assert_called_once_with(
+            DEVICE_ADDRESS, dev, mock_async_add, BluetoothSIGSensorEntity
+        )

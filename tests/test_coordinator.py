@@ -1,36 +1,22 @@
-"""Tests for coordinator.py - device management and entity creation."""
+"""Tests for coordinator.py — device management, discovery orchestration, lifecycle."""
 
 from __future__ import annotations
 
-import datetime
-import enum
-from unittest.mock import MagicMock
+import time
+from unittest.mock import MagicMock, patch
 
-from bluetooth_sig.gatt.characteristics.body_sensor_location import BodySensorLocation
-from bluetooth_sig.gatt.characteristics.cycling_power_vector import (
-    CrankRevolutionData,
-    CyclingPowerVectorData,
-    CyclingPowerVectorFlags,
-)
-from bluetooth_sig.gatt.characteristics.heart_rate_measurement import (
-    HeartRateData,
-    HeartRateMeasurementFlags,
-    SensorContactState,
-)
-from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
-from bluetooth_sig.gatt.characteristics.templates.data_structures import VectorData
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataUpdate,
 )
 from homeassistant.components.sensor import SensorDeviceClass
 
-from custom_components.bluetooth_sig_devices.const import DOMAIN
+from custom_components.bluetooth_sig_devices.const import (
+    STALE_DEVICE_TIMEOUT_SECONDS,
+    CharacteristicInfo,
+)
 from custom_components.bluetooth_sig_devices.coordinator import (
-    _UNIT_TO_DEVICE_CLASS,
     BluetoothSIGCoordinator,
-    _normalize_uuid_short,
-    _resolve_device_class,
 )
 
 
@@ -46,21 +32,8 @@ class TestBluetoothSIGCoordinator:
         assert coordinator.hass is mock_hass
         assert coordinator.entry is mock_config_entry
         assert coordinator.devices == {}
-        assert coordinator._processor_coordinators == {}
+        assert coordinator.processor_coordinators == {}
         assert coordinator.translator is not None
-
-    def test_set_entity_adder(
-        self, mock_hass: MagicMock, mock_config_entry: MagicMock
-    ) -> None:
-        """Test setting the entity adder callback."""
-        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        mock_add_entities = MagicMock()
-        mock_entity_class = MagicMock()
-
-        coordinator.set_entity_adder(mock_add_entities, mock_entity_class)
-
-        assert coordinator._async_add_entities is mock_add_entities
-        assert coordinator._entity_class is mock_entity_class
 
 
 class TestUpdateDevice:
@@ -109,13 +82,23 @@ class TestBuildPassiveBluetoothUpdate:
         mock_config_entry: MagicMock,
         mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
     ) -> None:
-        """Test that device info is correctly created."""
+        """Test that device info is correctly created.
+
+        Device info must NOT include identifiers or connections — the passive
+        BLE framework adds them automatically (using the "bluetooth" domain)
+        when device_id is None, which enables device merging with other BLE
+        integrations (e.g. xiaomi_ble) via the shared ("bluetooth", address)
+        connection.
+        """
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         result = coordinator.update_device(mock_bluetooth_service_info_battery)
 
         assert None in result.devices
         device_info = result.devices[None]
-        assert (DOMAIN, "AA:BB:CC:DD:EE:01") in device_info.get("identifiers", set())
+        # Must NOT set identifiers — framework handles this
+        assert "identifiers" not in device_info
+        # Must NOT set connections — framework handles this
+        assert "connections" not in device_info
         assert device_info.get("name") == "Test Battery Device"
 
     def test_no_rssi_entity_created(
@@ -339,60 +322,6 @@ class TestEntityCreationFromSIGCharacteristicData:
         assert len(result.entity_data) == 0
 
 
-class TestCharacteristicRegistry:
-    """Test cases for CharacteristicRegistry integration."""
-
-    def test_battery_level_registry_lookup(self) -> None:
-        """Test looking up Battery Level in CharacteristicRegistry."""
-        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-            "00002a19-0000-1000-8000-00805f9b34fb"
-        )
-
-        assert char_class is not None
-
-        instance = char_class()
-        assert instance.name == "Battery Level"
-        assert instance.unit == "%"
-        assert instance.python_type is int
-
-    def test_temperature_registry_lookup(self) -> None:
-        """Test looking up Temperature in CharacteristicRegistry."""
-        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-            "00002a6e-0000-1000-8000-00805f9b34fb"
-        )
-
-        assert char_class is not None
-
-        instance = char_class()
-        assert instance.name == "Temperature"
-        assert instance.unit == "°C"
-        # Temperature uses float python_type (scaled from raw int)
-        assert instance.python_type is float
-
-    def test_heart_rate_registry_lookup(self) -> None:
-        """Test looking up Heart Rate Measurement in CharacteristicRegistry."""
-        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-            "00002a37-0000-1000-8000-00805f9b34fb"
-        )
-
-        assert char_class is not None
-
-        instance = char_class()
-        assert instance.name == "Heart Rate Measurement"
-        assert instance.unit == "beats per minute"
-        # Heart Rate Measurement has a struct python_type (not a simple primitive)
-        assert instance.python_type is not None
-        assert instance.python_type not in (int, float, str, bool)
-
-    def test_unknown_uuid_returns_none(self) -> None:
-        """Test that unknown UUID returns None from registry."""
-        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-            "00000000-0000-0000-0000-000000000000"
-        )
-
-        assert char_class is None
-
-
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
@@ -457,7 +386,7 @@ class TestEdgeCases:
 
 
 class TestHasSupportedData:
-    """Test cases for _has_supported_data filtering."""
+    """Test cases for support_detector.has_supported_data filtering."""
 
     def test_device_with_known_service_data_is_supported(
         self,
@@ -467,7 +396,9 @@ class TestHasSupportedData:
     ) -> None:
         """Test that device with known GATT service UUID is supported."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        assert coordinator._has_supported_data(mock_bluetooth_service_info_battery)
+        assert coordinator.support_detector.has_supported_data(
+            mock_bluetooth_service_info_battery
+        )
 
     def test_device_with_unknown_data_is_not_supported(
         self,
@@ -493,7 +424,7 @@ class TestHasSupportedData:
         )
 
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        assert not coordinator._has_supported_data(service_info)
+        assert not coordinator.support_detector.has_supported_data(service_info)
 
     def test_device_with_empty_data_is_not_supported(
         self,
@@ -517,33 +448,216 @@ class TestHasSupportedData:
         )
 
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        assert not coordinator._has_supported_data(service_info)
+        assert not coordinator.support_detector.has_supported_data(service_info)
 
 
-class TestGATTProbeResult:
-    """Test cases for GATTProbeResult dataclass."""
+class TestGetSupportedCharacteristics:
+    """Test cases for support_detector.get_supported_characteristics."""
 
-    def test_gatt_probe_result_has_support(self) -> None:
-        """Test GATTProbeResult.has_support method."""
+    def test_returns_characteristic_names_for_service_data(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+        mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
+    ) -> None:
+        """Known service data UUIDs return characteristic names."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.support_detector.get_supported_characteristics(
+            mock_bluetooth_service_info_battery
+        )
+
+        assert len(result) > 0
+        # Each result is (uuid_str, name) tuple
+        for uuid_str, name in result:
+            assert isinstance(uuid_str, str)
+            assert isinstance(name, str)
+            assert len(name) > 0
+
+    def test_returns_empty_for_unknown_data(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Unknown service data returns an empty list."""
+        service_info = BluetoothServiceInfoBleak(
+            name="Unknown Device",
+            address="AA:BB:CC:DD:EE:FF",
+            rssi=-75,
+            manufacturer_data={},
+            service_data={
+                "00001234-0000-1000-8000-00805f9b34fb": b"\x00",
+            },
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.support_detector.get_supported_characteristics(
+            service_info
+        )
+        assert result == []
+
+    def test_includes_gatt_probe_results(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """GATT probe characteristic UUIDs are included in the result."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
         from custom_components.bluetooth_sig_devices.device_validator import (
             GATTProbeResult,
         )
 
-        # No parseable characteristics
-        result_empty = GATTProbeResult(
+        service_info = BluetoothServiceInfoBleak(
+            name="GATT Device",
             address="AA:BB:CC:DD:EE:FF",
-            name="Test Device",
-            parseable_count=0,
+            rssi=-70,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
         )
-        assert result_empty.has_support() is False
 
-        # Has parseable characteristics
-        result_with_chars = GATTProbeResult(
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        # Add a GATT probe result with Battery Level (0x2A19)
+        battery_uuid = BluetoothUUID("2A19")
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:FF"] = GATTProbeResult(
             address="AA:BB:CC:DD:EE:FF",
-            name="Test Device",
-            parseable_count=3,
+            name="GATT Device",
+            parseable_count=1,
+            supported_char_uuids=[battery_uuid],
         )
-        assert result_with_chars.has_support() is True
+
+        result = coordinator.support_detector.get_supported_characteristics(
+            service_info
+        )
+        assert len(result) >= 1
+        names = [name for _, name in result]
+        # Should contain a non-empty name string
+        assert all(len(n) > 0 for n in names)
+
+
+class TestKnownCharacteristics:
+    """Test cases for known_characteristics tracking."""
+
+    def test_known_characteristics_initially_empty(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Coordinator starts with empty known_characteristics."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        assert coordinator.known_characteristics == {}
+
+    def test_build_characteristics_summary_populates_known(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """_build_characteristics_summary populates known_characteristics."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        supported = [
+            CharacteristicInfo(uuid="uuid1", name="Temperature"),
+            CharacteristicInfo(uuid="uuid2", name="Humidity"),
+        ]
+        result = coordinator._build_characteristics_summary(
+            "AA:BB:CC:DD:EE:FF", supported
+        )
+
+        assert "Temperature" in result
+        assert "Humidity" in result
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.known_characteristics
+        assert (
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid1"]
+            == "Temperature"
+        )
+        assert (
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid2"]
+            == "Humidity"
+        )
+
+    def test_get_known_characteristics_merges_gatt(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """get_known_characteristics merges advertisement and GATT data."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
+        from custom_components.bluetooth_sig_devices.device_validator import (
+            GATTProbeResult,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        # Add advertisement-sourced characteristic
+        coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"] = {
+            "uuid1": "Temperature",
+        }
+
+        # Add a GATT probe result with Battery Level (0x2A19)
+        battery_uuid = BluetoothUUID("2A19")
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:FF"] = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="GATT Device",
+            parseable_count=1,
+            supported_char_uuids=[battery_uuid],
+        )
+
+        result = coordinator.get_known_characteristics("AA:BB:CC:DD:EE:FF")
+
+        # Should contain both the advertisement and GATT characteristics
+        assert "uuid1" in result
+        assert result["uuid1"] == "Temperature"
+        assert str(battery_uuid) in result
+
+    def test_get_known_characteristics_empty_address(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """get_known_characteristics returns empty dict for unknown address."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        result = coordinator.get_known_characteristics("FF:FF:FF:FF:FF:FF")
+        assert result == {}
+
+    def test_discovery_flow_includes_characteristics(
+        self,
+        hass,
+    ) -> None:
+        """Discovery flow data includes characteristics string."""
+        from tests.conftest import make_hub_entry, make_service_info
+
+        entry = make_hub_entry()
+        entry.add_to_hass(hass)
+
+        coordinator = BluetoothSIGCoordinator(hass, entry)
+        service_info = make_service_info()
+
+        with patch(
+            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+        ) as mock_create_flow:
+            coordinator._ensure_device_processor(service_info)
+
+            mock_create_flow.assert_called_once()
+            call_data = mock_create_flow.call_args[1]["data"]
+            assert "characteristics" in call_data
+            assert isinstance(call_data["characteristics"], str)
+            # Battery Level UUID is in the test service_info
+            assert len(call_data["characteristics"]) > 0
 
 
 class TestCoordinatorGATTMethods:
@@ -557,10 +671,9 @@ class TestCoordinatorGATTMethods:
         """Test coordinator initializes with GATT probe cache."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        assert hasattr(coordinator, "_gatt_probe_results")
-        assert coordinator._gatt_probe_results == {}
-        assert hasattr(coordinator, "_probe_failures")
-        assert coordinator._probe_failures == {}
+        assert hasattr(coordinator, "gatt_manager")
+        assert coordinator.gatt_manager.probe_results == {}
+        assert coordinator.gatt_manager.probe_failures == {}
 
     def test_has_supported_data_checks_gatt_results(
         self,
@@ -568,6 +681,8 @@ class TestCoordinatorGATTMethods:
         mock_config_entry: MagicMock,
     ) -> None:
         """Test _has_supported_data checks GATT probe results."""
+        from bluetooth_sig.types.uuid import BluetoothUUID
+
         from custom_components.bluetooth_sig_devices.device_validator import (
             GATTProbeResult,
         )
@@ -590,32 +705,33 @@ class TestCoordinatorGATTMethods:
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
         # Without GATT results, should not be supported
-        assert not coordinator._has_supported_data(service_info)
+        assert not coordinator.support_detector.has_supported_data(service_info)
 
-        # Add GATT probe result with parseable chars
-        coordinator._gatt_probe_results["AA:BB:CC:DD:EE:FF"] = GATTProbeResult(
+        # Add GATT probe result with parseable chars (must include real UUIDs)
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:FF"] = GATTProbeResult(
             address="AA:BB:CC:DD:EE:FF",
             name="GATT Device",
             parseable_count=2,
+            supported_char_uuids=[BluetoothUUID("2A19"), BluetoothUUID("2A6E")],
         )
 
         # Now should be supported
-        assert coordinator._has_supported_data(service_info)
+        assert coordinator.support_detector.has_supported_data(service_info)
 
-    def test_coordinator_has_validator(
+    def test_coordinator_has_support_detector(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """Test coordinator has device validator."""
-        from custom_components.bluetooth_sig_devices.device_validator import (
-            DeviceValidator,
+        """Test coordinator has support detector."""
+        from custom_components.bluetooth_sig_devices.support_detector import (
+            SupportDetector,
         )
 
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        assert hasattr(coordinator, "validator")
-        assert isinstance(coordinator.validator, DeviceValidator)
+        assert hasattr(coordinator, "support_detector")
+        assert isinstance(coordinator.support_detector, SupportDetector)
 
     async def test_probe_failures_incremented_on_generic_exception(
         self,
@@ -641,15 +757,15 @@ class TestCoordinatorGATTMethods:
         )
 
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        coordinator.async_probe_device = AsyncMock(
+        coordinator.gatt_manager.async_probe_device = AsyncMock(
             side_effect=RuntimeError("adapter error")
         )
 
         # Invoke the probe-and-setup directly, bypassing the semaphore check
-        await coordinator._async_probe_and_setup(service_info)
+        await coordinator.gatt_manager.async_probe_and_setup(service_info)
 
-        assert coordinator._probe_failures.get("AA:BB:CC:DD:EE:FF", 0) == 1
-        assert "AA:BB:CC:DD:EE:FF" not in coordinator._pending_probes
+        assert coordinator.gatt_manager.probe_failures.get("AA:BB:CC:DD:EE:FF", 0) == 1
+        assert "AA:BB:CC:DD:EE:FF" not in coordinator.gatt_manager.pending_probes
 
     async def test_probe_task_tracked_in_ensure_device_processor(
         self,
@@ -686,12 +802,12 @@ class TestCoordinatorGATTMethods:
 
         coordinator._ensure_device_processor(service_info)
 
-        assert "AA:BB:CC:DD:EE:FF" in coordinator._probe_tasks
-        assert coordinator._probe_tasks["AA:BB:CC:DD:EE:FF"] is mock_task
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.gatt_manager.probe_tasks
+        assert coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:FF"] is mock_task
 
 
 class TestGATTPollInterval:
-    """Test cases for poll_interval wiring and GATT polling lifecycle."""
+    """Test cases for poll_interval wiring."""
 
     def test_poll_interval_stored(
         self,
@@ -713,98 +829,22 @@ class TestGATTPollInterval:
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         assert coordinator.poll_interval == 300
 
-    def test_gatt_poll_tasks_initialised_empty(
-        self,
-        mock_hass: MagicMock,
-        mock_config_entry: MagicMock,
-    ) -> None:
-        """Test GATT poll task dict is initialised empty."""
-        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        assert coordinator._gatt_poll_tasks == {}
-        assert coordinator._cached_gatt_updates == {}
 
-    def test_start_gatt_poll_loop_creates_task(
-        self,
-        mock_hass: MagicMock,
-        mock_config_entry: MagicMock,
-    ) -> None:
-        """Test _start_gatt_poll_loop creates a background task."""
-        mock_task = MagicMock()
+class TestAdvertisementPathIndependence:
+    """Test that advertisement updates do NOT include GATT data."""
 
-        def _capture_and_close(coro, *args, **kwargs):
-            """Close the coroutine to avoid 'never awaited' warning."""
-            coro.close()
-            return mock_task
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
-
-        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        coordinator._start_gatt_poll_loop("AA:BB:CC:DD:EE:01")
-
-        mock_hass.async_create_task.assert_called_once()
-        assert "AA:BB:CC:DD:EE:01" in coordinator._gatt_poll_tasks
-        assert coordinator._gatt_poll_tasks["AA:BB:CC:DD:EE:01"] is mock_task
-
-    def test_start_gatt_poll_loop_idempotent(
-        self,
-        mock_hass: MagicMock,
-        mock_config_entry: MagicMock,
-    ) -> None:
-        """Test _start_gatt_poll_loop does not create duplicate tasks."""
-        mock_task = MagicMock()
-
-        def _capture_and_close(coro, *args, **kwargs):
-            """Close the coroutine to avoid 'never awaited' warning."""
-            coro.close()
-            return mock_task
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
-
-        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        coordinator._start_gatt_poll_loop("AA:BB:CC:DD:EE:01")
-        coordinator._start_gatt_poll_loop("AA:BB:CC:DD:EE:01")
-
-        assert mock_hass.async_create_task.call_count == 1
-
-
-class TestGATTCacheMerge:
-    """Test cases for merging cached GATT data into advertisement updates."""
-
-    def test_cached_gatt_data_merged_into_update(
+    def test_advertisement_update_excludes_gatt_data(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
         mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
     ) -> None:
-        """Test that cached GATT poll data is merged into update_device output."""
+        """Advertisement update should not contain any GATT-prefixed entity keys."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-
-        # Simulate cached GATT data for this device
-        from homeassistant.components.bluetooth.passive_update_processor import (
-            PassiveBluetoothEntityKey,
-        )
-        from homeassistant.components.sensor import SensorEntityDescription
-
-        gatt_key = PassiveBluetoothEntityKey("gatt_2a6e", "aabbccddeee01")
-        cached_update = PassiveBluetoothDataUpdate(
-            devices={},
-            entity_descriptions={
-                gatt_key: SensorEntityDescription(
-                    key="gatt_2a6e",
-                    name="Temperature",
-                    native_unit_of_measurement="°C",
-                )
-            },
-            entity_names={gatt_key: "Temperature"},
-            entity_data={gatt_key: 22.5},
-        )
-        coordinator._cached_gatt_updates["AA:BB:CC:DD:EE:01"] = cached_update
-
         result = coordinator.update_device(mock_bluetooth_service_info_battery)
 
-        # Should have both the battery entity from advertisement AND the GATT temperature
-        assert gatt_key in result.entity_data
-        assert result.entity_data[gatt_key] == 22.5
+        gatt_keys = [k for k in result.entity_data if "gatt_" in str(k.key).lower()]
+        assert gatt_keys == [], "GATT entities must not appear in advertisement updates"
 
     def test_no_cached_gatt_data_still_works(
         self,
@@ -821,34 +861,280 @@ class TestGATTCacheMerge:
         assert len(battery_keys) >= 1
 
 
-class TestAsyncStop:
-    """Test cases for async_stop cleanup."""
+class TestNeedsPollClosure:
+    """Test cases for the _needs_poll closure factory."""
 
-    async def test_async_stop_cancels_poll_tasks(
+    def test_returns_false_without_probe_results(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """Test async_stop cancels all GATT poll tasks."""
+        """No probe results means no poll is needed."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        svc_info = MagicMock()
+        assert check(svc_info, None) is False
+        assert check(svc_info, 999.0) is False
+
+    def test_returns_true_when_never_polled(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """First poll (last_poll=None) should always return True."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        assert check(MagicMock(), None) is True
+
+    def test_returns_true_when_interval_elapsed(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Poll needed when poll_age >= poll_interval."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=120
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        assert check(MagicMock(), 120.0) is True
+        assert check(MagicMock(), 121.0) is True
+
+    def test_returns_false_when_interval_not_elapsed(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No poll needed when poll_age < poll_interval."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=120
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        assert check(MagicMock(), 60.0) is False
+        assert check(MagicMock(), 0.0) is False
+
+
+class TestPollGattClosure:
+    """Test cases for the _poll_gatt closure factory."""
+
+    async def test_poll_raises_on_no_data(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """poll_method should raise RuntimeError when GATT returns None."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        coordinator.gatt_manager.async_poll_gatt_with_semaphore = MagicMock(
+            return_value=None
+        )
+        # Make the mock awaitable
+        import asyncio
+
+        fut: asyncio.Future[None] = asyncio.Future()
+        fut.set_result(None)
+        coordinator.gatt_manager.async_poll_gatt_with_semaphore = MagicMock(
+            return_value=fut
+        )
+
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01")
+        import pytest
+
+        with pytest.raises(RuntimeError, match="GATT poll returned no data"):
+            await poll(MagicMock())
+
+    async def test_poll_returns_update(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """poll_method should return the update from GATTManager."""
+        import asyncio
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        expected = PassiveBluetoothDataUpdate(
+            devices={}, entity_descriptions={}, entity_names={}, entity_data={}
+        )
+        fut: asyncio.Future[PassiveBluetoothDataUpdate] = asyncio.Future()
+        fut.set_result(expected)
+        coordinator.gatt_manager.async_poll_gatt_with_semaphore = MagicMock(
+            return_value=fut
+        )
+
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01")
+        result = await poll(MagicMock())
+        assert result is expected
+
+
+class TestInitialGattCache:
+    """Test the initial GATT read cache in GATTManager.
+
+    During ``async_probe_and_setup``, a successful probe should also
+    read characteristic values and cache the result. The first call to
+    ``async_poll_gatt_with_semaphore`` returns this cached data without
+    acquiring the semaphore or opening a BLE connection.
+    """
+
+    async def test_cached_data_returned_on_first_poll(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """First poll returns cached initial read without semaphore."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        gatt = coordinator.gatt_manager
+
+        cached_update = PassiveBluetoothDataUpdate(
+            devices={},
+            entity_descriptions={},
+            entity_names={},
+            entity_data={"key": 42},
+        )
+        gatt._initial_gatt_cache["AA:BB:CC:DD:EE:01"] = cached_update
+
+        result = await gatt.async_poll_gatt_with_semaphore("AA:BB:CC:DD:EE:01")
+        assert result is cached_update
+        # Cache is consumed — second call would go through semaphore
+        assert "AA:BB:CC:DD:EE:01" not in gatt._initial_gatt_cache
+
+    async def test_cache_consumed_after_first_poll(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """After consuming cache, subsequent polls use live GATT read."""
+        import asyncio
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        gatt = coordinator.gatt_manager
+
+        cached_update = PassiveBluetoothDataUpdate(
+            devices={},
+            entity_descriptions={},
+            entity_names={},
+            entity_data={"key": 42},
+        )
+        gatt._initial_gatt_cache["AA:BB:CC:DD:EE:01"] = cached_update
+
+        # First call returns cache
+        result1 = await gatt.async_poll_gatt_with_semaphore("AA:BB:CC:DD:EE:01")
+        assert result1 is cached_update
+
+        # Second call falls through to async_poll_gatt_characteristics
+        live_update = PassiveBluetoothDataUpdate(
+            devices={},
+            entity_descriptions={},
+            entity_names={},
+            entity_data={"key": 99},
+        )
+        fut: asyncio.Future[PassiveBluetoothDataUpdate | None] = asyncio.Future()
+        fut.set_result(live_update)
+        gatt.async_poll_gatt_characteristics = MagicMock(return_value=fut)
+
+        result2 = await gatt.async_poll_gatt_with_semaphore("AA:BB:CC:DD:EE:01")
+        assert result2 is live_update
+
+    async def test_remove_device_clears_cache(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """remove_device should clear the initial GATT cache."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        gatt = coordinator.gatt_manager
+
+        gatt._initial_gatt_cache["AA:BB:CC:DD:EE:01"] = MagicMock()
+        gatt.remove_device("AA:BB:CC:DD:EE:01")
+        assert "AA:BB:CC:DD:EE:01" not in gatt._initial_gatt_cache
+
+
+class TestNotifyProbeComplete:
+    """Test notify_probe_complete triggers immediate poll on processor."""
+
+    def test_triggers_debounced_poll_when_processor_exists(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Should schedule debounced poll when processor has last_service_info."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        address = "AA:BB:CC:DD:EE:01"
+
+        mock_proc = MagicMock()
+        mock_proc._last_service_info = MagicMock()
+        mock_proc._debounced_poll = MagicMock()
+        coordinator._processor_coordinators[address] = mock_proc
+
+        coordinator.notify_probe_complete(address)
+
+        mock_proc._debounced_poll.async_schedule_call.assert_called_once()
+
+    def test_noop_when_no_processor(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Should do nothing when no processor coordinator exists."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        # No exception raised, no processor to interact with
+        coordinator.notify_probe_complete("AA:BB:CC:DD:EE:01")
+
+    def test_noop_when_no_last_service_info(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Should not trigger poll when last_service_info is None."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        address = "AA:BB:CC:DD:EE:01"
+
+        mock_proc = MagicMock()
+        mock_proc._last_service_info = None
+        mock_proc._debounced_poll = MagicMock()
+        coordinator._processor_coordinators[address] = mock_proc
+
+        coordinator.notify_probe_complete(address)
+
+        mock_proc._debounced_poll.async_schedule_call.assert_not_called()
+
+
+class TestAsyncStop:
+    """Test cases for async_stop cleanup."""
+
+    async def test_async_stop_cancels_probe_tasks(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Test async_stop cancels all GATT probe tasks."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        # Simulate running poll tasks
         mock_task1 = MagicMock()
         mock_task2 = MagicMock()
-        coordinator._gatt_poll_tasks["AA:BB:CC:DD:EE:01"] = mock_task1
-        coordinator._gatt_poll_tasks["AA:BB:CC:DD:EE:02"] = mock_task2
-        coordinator._cached_gatt_updates["AA:BB:CC:DD:EE:01"] = MagicMock()
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_task1
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:02"] = mock_task2
+        coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
         mock_task1.cancel.assert_called_once()
         mock_task2.cancel.assert_called_once()
-        assert coordinator._gatt_poll_tasks == {}
-        assert coordinator._cached_gatt_updates == {}
-        assert coordinator._processor_coordinators == {}
+        assert coordinator.gatt_manager.probe_tasks == {}
+        assert coordinator.gatt_manager.pending_probes == set()
+        assert coordinator.processor_coordinators == {}
         assert coordinator.devices == {}
 
-    async def test_async_stop_cancels_probe_tasks(
+    async def test_async_stop_cancels_probe_tasks_individually(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
@@ -857,14 +1143,14 @@ class TestAsyncStop:
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
         mock_probe_task = MagicMock()
-        coordinator._probe_tasks["AA:BB:CC:DD:EE:01"] = mock_probe_task
-        coordinator._pending_probes.add("AA:BB:CC:DD:EE:01")
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_probe_task
+        coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
         mock_probe_task.cancel.assert_called_once()
-        assert coordinator._probe_tasks == {}
-        assert coordinator._pending_probes == set()
+        assert coordinator.gatt_manager.probe_tasks == {}
+        assert coordinator.gatt_manager.pending_probes == set()
 
     async def test_async_stop_cancels_discovery(
         self,
@@ -881,540 +1167,6 @@ class TestAsyncStop:
 
         mock_cancel.assert_called_once()
         assert coordinator._cancel_discovery is None
-
-
-# ---------------------------------------------------------------------------
-# Local test enums — used to test _to_ha_state without depending on library
-# __str__ changes that are not yet released.
-# ---------------------------------------------------------------------------
-
-
-class _TestSensorLocation(enum.IntEnum):
-    """Minimal IntEnum matching SensorLocationValue's shape."""
-
-    OTHER = 0
-    TOP_OF_SHOE = 1
-    IN_SHOE = 2
-
-
-class _TestSensorLocationWithStr(enum.IntEnum):
-    """IntEnum that already provides a human-readable __str__."""
-
-    OTHER = 0
-    TOP_OF_SHOE = 1
-    IN_SHOE = 2
-
-    def __str__(self) -> str:
-        return self.name.replace("_", " ").title()
-
-
-class _TestKeyboardFlags(enum.IntFlag):
-    """Minimal IntFlag matching KeyboardLEDs's shape."""
-
-    NUM_LOCK = 1
-    CAPS_LOCK = 2
-    SCROLL_LOCK = 4
-
-
-class TestToHaState:
-    """Tests for BluetoothSIGCoordinator._to_ha_state.
-
-    Covers every branch in the isinstance chain and validates the ordering
-    guarantees (bool before int, IntEnum before plain int, etc.).
-    """
-
-    # --- bool (must be checked before int) ---
-
-    def test_bool_true(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(True)
-        assert result is True
-        assert isinstance(result, bool)
-
-    def test_bool_false(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(False)
-        assert result is False
-        assert isinstance(result, bool)
-
-    def test_bool_not_coerced_to_int(self) -> None:
-        """bool subclasses int — ensure we return bool, not int(1)."""
-        result = BluetoothSIGCoordinator._to_ha_state(True)
-        assert type(result) is bool
-
-    # --- IntEnum → str() ---
-
-    def test_intenum_returns_str(self) -> None:
-        """IntEnum values must be stringified, not cast to int."""
-        result = BluetoothSIGCoordinator._to_ha_state(_TestSensorLocation.TOP_OF_SHOE)
-        assert isinstance(result, str)
-
-    def test_intenum_without_custom_str_returns_name(self) -> None:
-        """IntEnum without __str__ override → returns .name (member identifier)."""
-        result = BluetoothSIGCoordinator._to_ha_state(_TestSensorLocation.OTHER)
-        assert result == "OTHER"
-
-    def test_intenum_with_custom_str_returns_name(self) -> None:
-        """IntEnum with __str__ override → .name is still returned (not str())."""
-        result = BluetoothSIGCoordinator._to_ha_state(
-            _TestSensorLocationWithStr.TOP_OF_SHOE
-        )
-        assert result == "TOP_OF_SHOE"
-
-    def test_intenum_is_not_plain_int(self) -> None:
-        """IntEnum must NOT return a plain int — it should return str."""
-        result = BluetoothSIGCoordinator._to_ha_state(_TestSensorLocation.IN_SHOE)
-        assert not isinstance(result, int)
-
-    def test_real_library_intenum_barometric_pressure_trend(self) -> None:
-        """Real library IntEnum (BarometricPressureTrend) returns .name."""
-        from bluetooth_sig.gatt.characteristics.barometric_pressure_trend import (
-            BarometricPressureTrend,
-        )
-
-        val = BarometricPressureTrend(0)
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-        assert result == val.name
-
-    def test_real_library_intenum_door_window_status(self) -> None:
-        """Real library IntEnum (DoorWindowOpenStatus) returns .name."""
-        from bluetooth_sig.gatt.characteristics.door_window_status import (
-            DoorWindowOpenStatus,
-        )
-
-        val = DoorWindowOpenStatus(0)
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-        assert result == val.name
-
-    # --- IntFlag → int() ---
-
-    def test_intflag_returns_int(self) -> None:
-        """IntFlag values should become plain int."""
-        result = BluetoothSIGCoordinator._to_ha_state(
-            _TestKeyboardFlags.NUM_LOCK | _TestKeyboardFlags.CAPS_LOCK
-        )
-        assert isinstance(result, int)
-        assert not isinstance(result, enum.IntFlag)
-        assert result == 3
-
-    def test_intflag_single_flag_returns_int(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(_TestKeyboardFlags.SCROLL_LOCK)
-        assert isinstance(result, int)
-        assert result == 4
-
-    def test_intflag_zero_returns_int(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(_TestKeyboardFlags(0))
-        assert isinstance(result, int)
-        assert result == 0
-
-    def test_real_library_intflag_keyboard_leds(self) -> None:
-        """Real library IntFlag (KeyboardLEDs)."""
-        from bluetooth_sig.gatt.characteristics.boot_keyboard_output_report import (
-            KeyboardLEDs,
-        )
-
-        val = KeyboardLEDs(3)  # NUM_LOCK | CAPS_LOCK
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, int)
-        assert not isinstance(result, enum.IntFlag)
-        assert result == 3
-
-    # --- plain int ---
-
-    def test_plain_int(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(42)
-        assert result == 42
-        assert type(result) is int
-
-    def test_plain_int_zero(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(0)
-        assert result == 0
-        assert type(result) is int
-
-    def test_plain_int_negative(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(-7)
-        assert result == -7
-
-    # --- float ---
-
-    def test_float(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(36.5)
-        assert result == 36.5
-        assert type(result) is float
-
-    def test_float_zero(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(0.0)
-        assert result == 0.0
-        assert type(result) is float
-
-    def test_float_negative(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state(-273.15)
-        assert result == -273.15
-
-    # --- str ---
-
-    def test_str(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state("hello")
-        assert result == "hello"
-        assert type(result) is str
-
-    def test_str_empty(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state("")
-        assert result == ""
-
-    # --- fallback: str() for everything else ---
-
-    def test_timedelta_falls_through_to_str(self) -> None:
-        val = datetime.timedelta(seconds=150)
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-        assert result == str(val)
-
-    def test_datetime_falls_through_to_str(self) -> None:
-        val = datetime.datetime(2025, 6, 15, 12, 30, 0)
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-        assert result == str(val)
-
-    def test_date_falls_through_to_str(self) -> None:
-        val = datetime.date(2025, 6, 15)
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-        assert result == str(val)
-
-    def test_none_falls_through_to_str(self) -> None:
-        """None shouldn't normally reach _to_ha_state but it must not crash."""
-        result = BluetoothSIGCoordinator._to_ha_state(None)
-        assert result == "None"
-        assert isinstance(result, str)
-
-    def test_dict_falls_through_to_str(self) -> None:
-        """Dict must not crash — gets stringified."""
-        result = BluetoothSIGCoordinator._to_ha_state({"key": "val"})
-        assert isinstance(result, str)
-
-    def test_list_falls_through_to_str(self) -> None:
-        result = BluetoothSIGCoordinator._to_ha_state([1, 2, 3])
-        assert isinstance(result, str)
-
-    # --- ordering / edge cases ---
-
-    def test_bool_wins_over_int(self) -> None:
-        """bool is a subclass of int. _to_ha_state must return bool, not int."""
-        assert type(BluetoothSIGCoordinator._to_ha_state(True)) is bool
-        assert type(BluetoothSIGCoordinator._to_ha_state(False)) is bool
-
-    def test_intenum_wins_over_int(self) -> None:
-        """IntEnum is a subclass of int. Must go through str(), not int()."""
-        val = _TestSensorLocation.TOP_OF_SHOE
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        assert isinstance(result, str)
-
-    def test_intflag_does_not_hit_intenum_branch(self) -> None:
-        """IntFlag is NOT a subclass of IntEnum — should hit the int branch."""
-        val = _TestKeyboardFlags.NUM_LOCK
-        result = BluetoothSIGCoordinator._to_ha_state(val)
-        # IntFlag → int branch → plain int
-        assert isinstance(result, int)
-        assert not isinstance(result, str)
-
-
-# ---------------------------------------------------------------------------
-# Recursive struct decomposition tests (using real bluetooth-sig library types)
-# ---------------------------------------------------------------------------
-
-
-class TestAddStructEntities:
-    """Tests for _add_struct_entities recursive decomposition."""
-
-    @staticmethod
-    def _run(
-        struct_value: object,
-        char_name: str = "Test Char",
-        uuid: str = "2A37",
-        unit: str | None = "bpm",
-        is_diagnostic: bool = False,
-    ) -> tuple[dict, dict, dict]:
-        """Helper to call _add_struct_entities and return the three dicts."""
-        coord = BluetoothSIGCoordinator.__new__(BluetoothSIGCoordinator)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
-        coord._add_struct_entities(
-            "aabbccddee01",
-            uuid,
-            char_name,
-            struct_value,
-            unit,
-            is_diagnostic,
-            descs,
-            names,
-            data,
-        )
-        return descs, names, data
-
-    def test_flat_struct_creates_leaf_entities(self) -> None:
-        """VectorData (flat struct) → one entity per field."""
-        descs, names, data = self._run(
-            VectorData(x_axis=1.0, y_axis=2.0, z_axis=3.0),
-        )
-        keys = {k.key for k in data}
-        assert "2A37_x_axis" in keys
-        assert "2A37_y_axis" in keys
-        assert "2A37_z_axis" in keys
-        assert len(data) == 3
-
-    def test_flat_struct_values_coerced(self) -> None:
-        """VectorData leaf values go through _to_ha_state (float passthrough)."""
-        _, _, data = self._run(
-            VectorData(x_axis=1.5, y_axis=2.5, z_axis=3.5),
-        )
-        values = list(data.values())
-        assert 1.5 in values
-        assert 2.5 in values
-        assert 3.5 in values
-
-    def test_nested_struct_recurses(self) -> None:
-        """CyclingPowerVectorData → crank_revolution_data is recursed into."""
-        crank = CrankRevolutionData(
-            crank_revolutions=100,
-            last_crank_event_time=0.5,
-        )
-        vec = CyclingPowerVectorData(
-            flags=CyclingPowerVectorFlags(0),
-            crank_revolution_data=crank,
-            first_crank_measurement_angle=45.0,
-            instantaneous_force_magnitude_array=None,
-            instantaneous_torque_magnitude_array=None,
-        )
-        _, _, data = self._run(vec)
-        keys = {k.key for k in data}
-        # Nested struct fields get the parent field name as prefix
-        assert "2A37_crank_revolution_data_crank_revolutions" in keys
-        assert "2A37_crank_revolution_data_last_crank_event_time" in keys
-        # Direct leaf fields
-        assert "2A37_flags" in keys
-        assert "2A37_first_crank_measurement_angle" in keys
-
-    def test_nested_struct_leaf_values(self) -> None:
-        """Nested CrankRevolutionData leaf values are coerced correctly."""
-        crank = CrankRevolutionData(
-            crank_revolutions=42,
-            last_crank_event_time=1.25,
-        )
-        vec = CyclingPowerVectorData(
-            flags=CyclingPowerVectorFlags(0),
-            crank_revolution_data=crank,
-            first_crank_measurement_angle=90.0,
-            instantaneous_force_magnitude_array=None,
-            instantaneous_torque_magnitude_array=None,
-        )
-        _, _, data = self._run(vec)
-        val_map = {k.key: v for k, v in data.items()}
-        assert val_map["2A37_crank_revolution_data_crank_revolutions"] == 42
-        assert val_map["2A37_crank_revolution_data_last_crank_event_time"] == 1.25
-        assert val_map["2A37_first_crank_measurement_angle"] == 90.0
-
-    def test_nested_struct_display_names(self) -> None:
-        """Display names include the full path through nested structs."""
-        crank = CrankRevolutionData(
-            crank_revolutions=100,
-            last_crank_event_time=0.5,
-        )
-        vec = CyclingPowerVectorData(
-            flags=CyclingPowerVectorFlags(0),
-            crank_revolution_data=crank,
-            first_crank_measurement_angle=45.0,
-            instantaneous_force_magnitude_array=None,
-            instantaneous_torque_magnitude_array=None,
-        )
-        _, names, _ = self._run(vec, char_name="Cycling Power Vector")
-        name_map = {k.key: v for k, v in names.items()}
-        assert name_map["2A37_crank_revolution_data_crank_revolutions"] == (
-            "Cycling Power Vector Crank Revolution Data Crank Revolutions"
-        )
-        assert name_map["2A37_first_crank_measurement_angle"] == (
-            "Cycling Power Vector First Crank Measurement Angle"
-        )
-
-    def test_nested_struct_total_entity_count(self) -> None:
-        """CyclingPowerVectorData produces correct total entity count.
-
-        flags (leaf) + 2 crank fields (nested) + angle (leaf)
-        + force_array (leaf) + torque_array (leaf) = 6.
-        """
-        crank = CrankRevolutionData(
-            crank_revolutions=100,
-            last_crank_event_time=0.5,
-        )
-        vec = CyclingPowerVectorData(
-            flags=CyclingPowerVectorFlags(0),
-            crank_revolution_data=crank,
-            first_crank_measurement_angle=45.0,
-            instantaneous_force_magnitude_array=None,
-            instantaneous_torque_magnitude_array=None,
-        )
-        _, _, data = self._run(vec)
-        assert len(data) == 6
-
-    def test_heart_rate_struct_diverse_types(self) -> None:
-        """HeartRateData exercises int, IntEnum, IntFlag, tuple, and optional."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8, 0.9),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        _, _, data = self._run(hr)
-        val_map = {k.key: v for k, v in data.items()}
-        # plain int preserved
-        assert val_map["2A37_heart_rate"] == 72
-        # IntEnum → str
-        assert isinstance(val_map["2A37_sensor_location"], str)
-        # IntFlag → int (IntFlag is NOT IntEnum, falls to int branch)
-        assert isinstance(val_map["2A37_flags"], int)
-        assert val_map["2A37_flags"] == 0
-        # tuple → str (fallback)
-        assert isinstance(val_map["2A37_rr_intervals"], str)
-        assert len(data) == 6
-
-    def test_struct_intenum_leaf_coerced_to_str(self) -> None:
-        """IntEnum fields inside a struct go through str() coercion."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8,),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        _, _, data = self._run(hr)
-        val_map = {k.key: v for k, v in data.items()}
-        # BodySensorLocation is IntEnum without custom __str__
-        assert isinstance(val_map["2A37_sensor_location"], str)
-        # SensorContactState is IntEnum with custom __str__
-        assert isinstance(val_map["2A37_sensor_contact"], str)
-
-    def test_non_struct_value_is_rejected(self) -> None:
-        """Passing a non-struct to _add_struct_entities creates no entities."""
-        _, _, data = self._run(42)
-        assert len(data) == 0
-
-
-# ---------------------------------------------------------------------------
-# _resolve_device_class tests
-# ---------------------------------------------------------------------------
-
-
-class TestResolveDeviceClass:
-    """Tests for _resolve_device_class mapping function."""
-
-    def test_unambiguous_units_map_correctly(self) -> None:
-        """Each entry in _UNIT_TO_DEVICE_CLASS resolves as expected."""
-        for unit, expected_dc in _UNIT_TO_DEVICE_CLASS.items():
-            result = _resolve_device_class(unit, "Some Sensor")
-            assert result == expected_dc, (
-                f"Unit {unit!r} → {result}, expected {expected_dc}"
-            )
-
-    def test_celsius_maps_to_temperature(self) -> None:
-        result = _resolve_device_class("°C", "Temperature")
-        assert result == SensorDeviceClass.TEMPERATURE
-
-    def test_kelvin_maps_to_temperature(self) -> None:
-        result = _resolve_device_class("K", "Temperature")
-        assert result == SensorDeviceClass.TEMPERATURE
-
-    def test_percent_battery_resolved(self) -> None:
-        result = _resolve_device_class("%", "Battery Level")
-        assert result == SensorDeviceClass.BATTERY
-
-    def test_percent_humidity_resolved(self) -> None:
-        result = _resolve_device_class("%", "Humidity")
-        assert result == SensorDeviceClass.HUMIDITY
-
-    def test_percent_generic_returns_none(self) -> None:
-        """Generic '%' with no battery/humidity name → None."""
-        result = _resolve_device_class("%", "CPU Usage")
-        assert result is None
-
-    def test_ambiguous_ppm_not_mapped_without_uuid(self) -> None:
-        """ppm without a UUID is still ambiguous — unit-only lookup returns None."""
-        result = _resolve_device_class("ppm", "CO2 Concentration")
-        assert result is None
-
-    def test_ambiguous_mm_not_mapped(self) -> None:
-        """mm is deliberately excluded — could be distance or precipitation."""
-        result = _resolve_device_class("mm", "Rainfall")
-        assert result is None
-
-    def test_ambiguous_m_not_mapped(self) -> None:
-        """m is deliberately excluded — could be distance or time months."""
-        result = _resolve_device_class("m", "Distance")
-        assert result is None
-
-    def test_ambiguous_m_per_s_not_mapped(self) -> None:
-        """m/s is deliberately excluded — could be SPEED or WIND_SPEED."""
-        result = _resolve_device_class("m/s", "Wind Speed")
-        assert result is None
-
-    def test_none_unit_returns_none(self) -> None:
-        result = _resolve_device_class(None, "Something")
-        assert result is None
-
-    def test_empty_unit_returns_none(self) -> None:
-        result = _resolve_device_class("", "Something")
-        assert result is None
-
-    def test_whitespace_unit_returns_none(self) -> None:
-        result = _resolve_device_class("  ", "Something")
-        assert result is None
-
-    def test_unknown_unit_returns_none(self) -> None:
-        result = _resolve_device_class("furlongs/fortnight", "Velocity")
-        assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _normalize_uuid_short tests
-# ---------------------------------------------------------------------------
-
-
-class TestNormalizeUuidShort:
-    """Tests for the _normalize_uuid_short helper."""
-
-    def test_full_uppercase_uuid(self) -> None:
-        assert _normalize_uuid_short("00002A6E-0000-1000-8000-00805F9B34FB") == "2A6E"
-
-    def test_full_lowercase_uuid(self) -> None:
-        assert _normalize_uuid_short("00002a6e-0000-1000-8000-00805f9b34fb") == "2A6E"
-
-    def test_gatt_prefixed_lowercase(self) -> None:
-        assert _normalize_uuid_short("gatt_2a6e") == "2A6E"
-
-    def test_gatt_prefixed_uppercase(self) -> None:
-        assert _normalize_uuid_short("GATT_2A6E") == "2A6E"
-
-    def test_already_short_uppercase(self) -> None:
-        assert _normalize_uuid_short("2A6E") == "2A6E"
-
-    def test_already_short_lowercase(self) -> None:
-        assert _normalize_uuid_short("2a6e") == "2A6E"
-
-    def test_battery_level_uuid(self) -> None:
-        assert _normalize_uuid_short("00002A19-0000-1000-8000-00805F9B34FB") == "2A19"
-
-    def test_invalid_non_hex_returns_none(self) -> None:
-        assert _normalize_uuid_short("ZZZZ") is None
-
-    def test_too_long_non_uuid_returns_none(self) -> None:
-        # 8-char segment after lstrip still too long
-        assert _normalize_uuid_short("ABCD1234") is None
-
-    def test_empty_string_returns_none(self) -> None:
-        assert _normalize_uuid_short("") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1484,245 +1236,343 @@ class TestDeviceClassWiringSimple:
 
 
 # ---------------------------------------------------------------------------
-# Struct field unit inheritance fix tests
+# Helper to build a service_info with controllable address type metadata
 # ---------------------------------------------------------------------------
 
 
-class TestStructFieldUnitInheritance:
-    """Tests that non-numeric struct fields do not inherit parent unit."""
-
-    @staticmethod
-    def _run(
-        struct_value: object,
-        char_name: str = "Test Char",
-        uuid: str = "2A37",
-        unit: str | None = "bpm",
-        is_diagnostic: bool = False,
-    ) -> tuple[dict, dict, dict]:
-        """Helper to call _add_struct_entities and return the three dicts."""
-        coord = BluetoothSIGCoordinator.__new__(BluetoothSIGCoordinator)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
-        coord._add_struct_entities(
-            "aabbccddee01",
-            uuid,
-            char_name,
-            struct_value,
-            unit,
-            is_diagnostic,
-            descs,
-            names,
-            data,
-        )
-        return descs, names, data
-
-    def test_numeric_fields_keep_unit(self) -> None:
-        """Plain int/float fields should keep the parent unit."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8,),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        descs, _, _ = self._run(hr, unit="bpm")
-        desc_map = {k.key: v for k, v in descs.items()}
-
-        # heart_rate is a plain int → should keep "bpm"
-        assert desc_map["2A37_heart_rate"].native_unit_of_measurement == "bpm"
-
-    def test_intflag_field_drops_unit(self) -> None:
-        """IntFlag fields should NOT inherit the parent unit."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8,),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        descs, _, _ = self._run(hr, unit="bpm")
-        desc_map = {k.key: v for k, v in descs.items()}
-
-        # flags is IntFlag → should NOT have "bpm"
-        assert desc_map["2A37_flags"].native_unit_of_measurement is None
-
-    def test_intenum_field_drops_unit(self) -> None:
-        """IntEnum fields should NOT inherit the parent unit."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8,),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        descs, _, _ = self._run(hr, unit="bpm")
-        desc_map = {k.key: v for k, v in descs.items()}
-
-        # sensor_contact is IntEnum (has .name) → should NOT have "bpm"
-        assert desc_map["2A37_sensor_contact"].native_unit_of_measurement is None
-        # sensor_location is also IntEnum
-        assert desc_map["2A37_sensor_location"].native_unit_of_measurement is None
-
-    def test_tuple_field_drops_unit(self) -> None:
-        """Non-scalar fields (tuple→str) should NOT inherit the parent unit."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8, 0.9),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        descs, _, _ = self._run(hr, unit="bpm")
-        desc_map = {k.key: v for k, v in descs.items()}
-
-        # rr_intervals is tuple → str fallback → no unit
-        assert desc_map["2A37_rr_intervals"].native_unit_of_measurement is None
-
-    def test_energy_expended_keeps_unit(self) -> None:
-        """energy_expended is a plain int → should keep parent unit."""
-        hr = HeartRateData(
-            heart_rate=72,
-            sensor_contact=SensorContactState.DETECTED,
-            energy_expended=150,
-            rr_intervals=(0.8,),
-            flags=HeartRateMeasurementFlags(0),
-            sensor_location=BodySensorLocation.CHEST,
-        )
-        descs, _, _ = self._run(hr, unit="bpm")
-        desc_map = {k.key: v for k, v in descs.items()}
-
-        # energy_expended is int → keeps unit
-        assert desc_map["2A37_energy_expended"].native_unit_of_measurement == "bpm"
+def _make_service_info_with_addr_type(
+    address: str,
+    *,
+    address_type: str | None = None,
+    connectable: bool = True,
+    service_data: dict | None = None,
+) -> BluetoothServiceInfoBleak:
+    """Build a BluetoothServiceInfoBleak with configurable BlueZ AddressType."""
+    device = MagicMock()
+    if address_type is not None:
+        device.details = {"props": {"AddressType": address_type}}
+    else:
+        device.details = {}
+    return BluetoothServiceInfoBleak(
+        name="Test",
+        address=address,
+        rssi=-60,
+        manufacturer_data={},
+        service_data=service_data or {},
+        service_uuids=[],
+        source="local",
+        device=device,
+        advertisement=MagicMock(),
+        connectable=connectable,
+        time=0,
+        tx_power=None,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Deduplication across interpreted + service_data paths
-# ---------------------------------------------------------------------------
+class TestEphemeralAddressFiltering:
+    """Test that ephemeral (RPA/NRPA) addresses are filtered out of discovery."""
 
-
-class TestDeduplication:
-    """Tests that interpreted + service_data entities are deduplicated."""
-
-    def test_service_data_skipped_when_in_skip_uuids(
+    def test_rpa_address_is_filtered(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """_add_service_data_entities skips UUIDs already in skip_uuids."""
-        from bluetooth_sig.types.uuid import BluetoothUUID
-
+        """RPA address (random, MSB 0x40-0x7F) is never added to _seen_devices."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
-
-        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
-        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
-
-        coordinator._add_service_data_entities(
-            "aabbccddeee01",
-            service_data,
-            descs,
-            names,
-            data,
-            skip_uuids={battery_uuid_str},
+        si = _make_service_info_with_addr_type(
+            "5A:BB:CC:DD:EE:FF", address_type="random"
         )
 
-        # UUID was in skip_uuids → no entity created
-        assert len(data) == 0
+        from homeassistant.components.bluetooth import BluetoothChange
 
-    def test_service_data_created_when_not_in_skip_uuids(
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
+
+    def test_nrpa_address_is_filtered(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """_add_service_data_entities creates entity when UUID not in skip_uuids."""
-        from bluetooth_sig.types.uuid import BluetoothUUID
-
+        """NRPA address (random, MSB 0x00-0x3F) is never added to _seen_devices."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
-
-        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
-        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
-
-        coordinator._add_service_data_entities(
-            "aabbccddeee01",
-            service_data,
-            descs,
-            names,
-            data,
-            skip_uuids=set(),  # empty → nothing skipped
+        si = _make_service_info_with_addr_type(
+            "1A:BB:CC:DD:EE:FF", address_type="random"
         )
 
-        assert len(data) >= 1
+        from homeassistant.components.bluetooth import BluetoothChange
 
-    def test_seen_uuids_populated_by_sig_entity_path(
-        self,
-        mock_hass: MagicMock,
-        mock_config_entry: MagicMock,
-        mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak,
-    ) -> None:
-        """After update_device, Battery UUID must appear in seen_uuids when tracked."""
-        from bluetooth_sig.advertising import SIGCharacteristicData
-        from bluetooth_sig.types.uuid import BluetoothUUID
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
 
-        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
+        assert "1A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
 
-        battery_uuid = BluetoothUUID("00002a19-0000-1000-8000-00805f9b34fb")
-        sig_data = SIGCharacteristicData(
-            uuid=battery_uuid,
-            characteristic_name="Battery Level",
-            parsed_value=75,
-        )
-
-        seen: set[str] = set()
-        coordinator._add_sig_characteristic_entity(
-            "aabbccddeee01",
-            sig_data,
-            descs,
-            names,
-            data,
-            seen_uuids=seen,
-        )
-
-        assert "00002a19-0000-1000-8000-00805f9b34fb" in seen
-
-    def test_service_data_not_skipped_when_uuid_absent(
+    def test_public_address_is_not_filtered(
         self,
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """Different UUIDs are not affected by skip_uuids."""
-        from bluetooth_sig.types.uuid import BluetoothUUID
-
+        """Public address passes through the filter."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        descs: dict = {}
-        names: dict = {}
-        data: dict = {}
-
-        battery_uuid_str = "00002a19-0000-1000-8000-00805f9b34fb"
-        temp_uuid_str = "00002a6e-0000-1000-8000-00805f9b34fb"
-        service_data = {BluetoothUUID(battery_uuid_str): bytes([0x4B])}
-
-        coordinator._add_service_data_entities(
-            "aabbccddeee01",
-            service_data,
-            descs,
-            names,
-            data,
-            skip_uuids={
-                temp_uuid_str
-            },  # different UUID — battery should still be created
+        si = _make_service_info_with_addr_type(
+            "AA:BB:CC:DD:EE:FF", address_type="public"
         )
 
-        assert len(data) >= 1
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 0
+
+    def test_random_static_address_is_not_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Random Static address (random, MSB 0xC0-0xFF) passes through."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type(
+            "C0:11:22:33:44:55", address_type="random"
+        )
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "C0:11:22:33:44:55" in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 0
+
+    def test_unknown_address_type_is_not_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Address with no BlueZ metadata (unknown type) is not filtered."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("AA:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 0
+
+    def test_filtered_count_increments_for_multiple_ephemeral(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Multiple ephemeral addresses all increment the counter."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        for i in range(5):
+            si = _make_service_info_with_addr_type(
+                f"5{i}:BB:CC:DD:EE:FF", address_type="random"
+            )
+            coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 5
+        assert len(coordinator.discovery_tracker.seen_devices) == 0
+
+    def test_last_seen_time_updated_for_static(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Static addresses get their last-seen timestamp updated."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type(
+            "AA:BB:CC:DD:EE:FF", address_type="public"
+        )
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.discovery_tracker.last_seen_time
+        assert coordinator.discovery_tracker.last_seen_time["AA:BB:CC:DD:EE:FF"] > 0
+
+    def test_last_seen_time_not_set_for_ephemeral(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Ephemeral addresses do NOT get a last-seen timestamp."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type(
+            "5A:BB:CC:DD:EE:FF", address_type="random"
+        )
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.last_seen_time
+
+
+class TestStaleDeviceCleanup:
+    """Test periodic stale device cleanup logic."""
+
+    def test_stale_entries_are_removed(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Addresses older than STALE_DEVICE_TIMEOUT_SECONDS are cleaned up."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        addr = "AA:BB:CC:DD:EE:01"
+
+        # Manually inject a stale entry
+        coordinator.discovery_tracker.seen_devices.add(addr)
+        coordinator.discovery_tracker.rejected_devices.add(addr)
+        coordinator.discovery_tracker.discovery_triggered.add(addr)
+        coordinator.gatt_manager.probe_failures[addr] = 2
+        coordinator.discovery_tracker.last_seen_time[addr] = (
+            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 10
+        )
+
+        coordinator.discovery_tracker.async_cleanup_stale_devices()
+
+        assert addr not in coordinator.discovery_tracker.seen_devices
+        assert addr not in coordinator.discovery_tracker.rejected_devices
+        assert addr not in coordinator.discovery_tracker.discovery_triggered
+        assert addr not in coordinator.gatt_manager.probe_failures
+        assert addr not in coordinator.discovery_tracker.last_seen_time
+
+    def test_fresh_entries_are_not_removed(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Recently-seen addresses are NOT cleaned up."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        addr = "AA:BB:CC:DD:EE:02"
+
+        coordinator.discovery_tracker.seen_devices.add(addr)
+        coordinator.discovery_tracker.last_seen_time[addr] = time.monotonic()
+
+        coordinator.discovery_tracker.async_cleanup_stale_devices()
+
+        assert addr in coordinator.discovery_tracker.seen_devices
+        assert addr in coordinator.discovery_tracker.last_seen_time
+
+    def test_active_processor_entries_are_never_evicted(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Addresses with active processor coordinators are never removed."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        addr = "AA:BB:CC:DD:EE:03"
+
+        coordinator.discovery_tracker.seen_devices.add(addr)
+        coordinator.discovery_tracker.last_seen_time[addr] = (
+            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 100
+        )
+        coordinator.processor_coordinators[addr] = MagicMock()
+
+        coordinator.discovery_tracker.async_cleanup_stale_devices()
+
+        assert addr in coordinator.discovery_tracker.seen_devices
+        assert addr in coordinator.discovery_tracker.last_seen_time
+
+    def test_config_entry_addresses_are_never_evicted(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Addresses with confirmed config entries are never removed."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        addr = "AA:BB:CC:DD:EE:04"
+
+        coordinator.discovery_tracker.seen_devices.add(addr)
+        coordinator.discovery_tracker.last_seen_time[addr] = (
+            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 100
+        )
+
+        # Simulate _has_config_entry returning True
+        with patch.object(coordinator, "_has_config_entry", return_value=True):
+            coordinator.discovery_tracker.async_cleanup_stale_devices()
+
+        assert addr in coordinator.discovery_tracker.seen_devices
+
+    def test_gatt_probe_results_cleaned_for_stale(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Stale cleanup also removes GATT probe caches and device instances."""
+        from custom_components.bluetooth_sig_devices.device_validator import (
+            GATTProbeResult,
+        )
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        addr = "AA:BB:CC:DD:EE:05"
+
+        coordinator.discovery_tracker.seen_devices.add(addr)
+        coordinator.discovery_tracker.last_seen_time[addr] = (
+            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 10
+        )
+        coordinator.gatt_manager.probe_results[addr] = GATTProbeResult(
+            address=addr, parseable_count=2
+        )
+        coordinator.devices[addr] = MagicMock()
+
+        coordinator.discovery_tracker.async_cleanup_stale_devices()
+
+        assert addr not in coordinator.gatt_manager.probe_results
+        assert addr not in coordinator.devices
+
+
+class TestSeenDevicesEviction:
+    """Test bounded _seen_devices set with LRU eviction."""
+
+    def test_evict_oldest_removes_quarter_of_entries(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """_evict_oldest_seen removes ~25% of the oldest entries."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        base_time = time.monotonic()
+        for i in range(100):
+            addr = f"AA:BB:CC:{i:02X}:00:00"
+            coordinator.discovery_tracker.seen_devices.add(addr)
+            coordinator.discovery_tracker.last_seen_time[addr] = base_time + i
+
+        assert len(coordinator.discovery_tracker.seen_devices) == 100
+
+        coordinator.discovery_tracker._evict_oldest_seen()
+
+        # Should have removed ~25 entries
+        assert len(coordinator.discovery_tracker.seen_devices) == 75
+
+    def test_eviction_removes_oldest_by_timestamp(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Eviction targets the least-recently-seen addresses."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        old_addr = "AA:BB:CC:00:00:01"
+        new_addr = "AA:BB:CC:00:00:02"
+
+        coordinator.discovery_tracker.seen_devices.add(old_addr)
+        coordinator.discovery_tracker.last_seen_time[old_addr] = time.monotonic() - 1000
+
+        coordinator.discovery_tracker.seen_devices.add(new_addr)
+        coordinator.discovery_tracker.last_seen_time[new_addr] = time.monotonic()
+
+        # Force eviction of 1 entry (25% of 2, min 1)
+        coordinator.discovery_tracker._evict_oldest_seen()
+
+        # The old one should be gone, the new one should remain
+        assert old_addr not in coordinator.discovery_tracker.seen_devices
+        assert new_addr in coordinator.discovery_tracker.seen_devices

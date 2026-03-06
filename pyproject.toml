@@ -9,7 +9,7 @@ description = "Home Assistant integration for Bluetooth SIG devices"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "bluetooth-sig @ git+https://github.com/RonanB96/bluetooth-sig-python.git",
+    "bluetooth-sig>=0.2.0",
 ]
 
 [project.optional-dependencies]

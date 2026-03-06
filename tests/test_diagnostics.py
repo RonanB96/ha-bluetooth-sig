@@ -15,21 +15,43 @@ def _make_entry(
     processor_coordinators: int = 0,
     probe_results: dict | None = None,
     probe_failures: dict | None = None,
-    cached_updates: dict | None = None,
-    poll_tasks: int = 0,
     pending_probes: int = 0,
 ) -> MagicMock:
-    """Build a mock config entry with a minimal coordinator."""
-    coordinator = MagicMock()
-    coordinator.devices = {f"addr_{i}": MagicMock() for i in range(tracked_devices)}
-    coordinator._processor_coordinators = {
-        f"addr_{i}": MagicMock() for i in range(processor_coordinators)
+    """Build a mock config entry with a minimal coordinator.
+
+    The coordinator mock provides ``get_diagnostics_snapshot()`` returning
+    a dict in the same shape as the real implementation.
+    """
+    _probe_results = probe_results or {}
+    _probe_failures = probe_failures or {}
+
+    # Build the snapshot dict that the real coordinator would return
+    probe_results_data: dict[str, dict] = {}
+    for addr, result in _probe_results.items():
+        probe_results_data[addr] = {
+            "parseable_characteristics": result.parseable_count,
+            "has_support": result.has_support(),
+            "probe_failures": _probe_failures.get(addr, 0),
+        }
+
+    snapshot = {
+        "device_statistics": {
+            "tracked_devices": tracked_devices,
+            "active_processor_coordinators": processor_coordinators,
+            "gatt_probed_devices": len(_probe_results),
+            "pending_probes": pending_probes,
+            "seen_devices": 0,
+            "rejected_devices": 0,
+            "discovery_triggered": 0,
+            "filtered_ephemeral_count": 0,
+        },
+        "gatt_probe_results": probe_results_data,
+        "probe_failures": dict(_probe_failures),
+        "known_characteristics": {},
     }
-    coordinator._gatt_probe_results = probe_results or {}
-    coordinator._probe_failures = probe_failures or {}
-    coordinator._cached_gatt_updates = cached_updates or {}
-    coordinator._gatt_poll_tasks = {f"addr_{i}": MagicMock() for i in range(poll_tasks)}
-    coordinator._pending_probes = {f"addr_{i}" for i in range(pending_probes)}
+
+    coordinator = MagicMock()
+    coordinator.get_diagnostics_snapshot.return_value = snapshot
 
     entry = MagicMock()
     entry.options = options or {}
@@ -51,7 +73,7 @@ class TestAsyncGetConfigEntryDiagnostics:
         assert "device_statistics" in result
         assert "gatt_probe_results" in result
         assert "probe_failures" in result
-        assert "cached_gatt_entity_counts" in result
+        assert "known_characteristics" in result
 
     async def test_device_statistics_counts_correctly(
         self, hass: HomeAssistant
@@ -60,7 +82,6 @@ class TestAsyncGetConfigEntryDiagnostics:
         entry = _make_entry(
             tracked_devices=3,
             processor_coordinators=2,
-            poll_tasks=1,
             pending_probes=1,
         )
         result = await async_get_config_entry_diagnostics(hass, entry)
@@ -69,7 +90,6 @@ class TestAsyncGetConfigEntryDiagnostics:
         assert stats["tracked_devices"] == 3
         assert stats["active_processor_coordinators"] == 2
         assert stats["gatt_probed_devices"] == 0
-        assert stats["gatt_poll_tasks_active"] == 1
         assert stats["pending_probes"] == 1
 
     async def test_options_are_passed_through(self, hass: HomeAssistant) -> None:
@@ -105,13 +125,3 @@ class TestAsyncGetConfigEntryDiagnostics:
         result = await async_get_config_entry_diagnostics(hass, entry)
 
         assert result["probe_failures"] == {"AA:BB:CC:DD:EE:FF": 3}
-
-    async def test_cached_gatt_entity_counts(self, hass: HomeAssistant) -> None:
-        """Cached GATT updates report entity count per address."""
-        cached_update = MagicMock()
-        cached_update.entity_data = {"k1": 1.0, "k2": 2.0, "k3": 3.0}
-
-        entry = _make_entry(cached_updates={"AA:BB:CC:DD:EE:FF": cached_update})
-        result = await async_get_config_entry_diagnostics(hass, entry)
-
-        assert result["cached_gatt_entity_counts"] == {"AA:BB:CC:DD:EE:FF": 3}

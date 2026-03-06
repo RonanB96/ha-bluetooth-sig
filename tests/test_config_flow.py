@@ -63,7 +63,7 @@ async def test_flow_user_single_instance_allowed(
     )
 
     assert result3["type"] == FlowResultType.ABORT
-    assert result3["reason"] == "single_instance_allowed"
+    assert result3["reason"] == "already_configured"
 
 
 async def test_flow_user_bluetooth_not_available(

@@ -76,6 +76,26 @@ _FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 # ---------------------------------------------------------------------------
+# State query helpers
+# ---------------------------------------------------------------------------
+
+
+def find_sensor_states(
+    hass: HomeAssistant,
+    *,
+    contains: str | None = None,
+    unit: str | None = None,
+) -> list[Any]:
+    """Return sensor states, optionally filtered by entity_id substring or unit."""
+    states = hass.states.async_all("sensor")
+    if contains:
+        states = [s for s in states if contains.lower() in s.entity_id.lower()]
+    if unit:
+        states = [s for s in states if s.attributes.get("unit_of_measurement") == unit]
+    return states
+
+
+# ---------------------------------------------------------------------------
 # Deserialisation helpers
 # ---------------------------------------------------------------------------
 

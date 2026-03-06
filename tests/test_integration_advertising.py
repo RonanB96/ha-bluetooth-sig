@@ -20,51 +20,48 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.bluetooth_sig_devices.const import DOMAIN
-
+from .bluetooth_helpers import (
+    find_sensor_states as _find_sensor_states,
+)
 from .bluetooth_helpers import (
     inject_bluetooth_service_info,
     iter_service_infos,
     load_fixture,
     load_service_info,
 )
+from .conftest import setup_device_entry
 
 # ---------------------------------------------------------------------------
-# Shared fixtures
+# enable_bluetooth creates internal manager timers (scanner expiry,
+# unavailable tracking) that are not cancelled by the test framework.
+# Mark them as expected to avoid verify_cleanup teardown failures.
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
-async def integration_entry(hass: HomeAssistant) -> MockConfigEntry:
-    """Set up a real integration config entry for end-to-end tests."""
-    entry = MockConfigEntry(
-        version=1,
-        minor_version=1,
-        domain=DOMAIN,
-        title="Bluetooth SIG Devices",
-        data={},
-        source="user",
-        unique_id=DOMAIN,
-    )
-    entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
+@pytest.fixture(autouse=True)
+def expected_lingering_timers() -> bool:
+    """Allow lingering timers from the Bluetooth manager."""
+    return True
 
 
-def _find_sensor_states(
-    hass: HomeAssistant,
-    *,
-    contains: str | None = None,
-    unit: str | None = None,
-) -> list[Any]:
-    """Return sensor states, optionally filtered by entity_id substring or unit."""
-    states = hass.states.async_all("sensor")
-    if contains:
-        states = [s for s in states if contains.lower() in s.entity_id.lower()]
-    if unit:
-        states = [s for s in states if s.attributes.get("unit_of_measurement") == unit]
-    return states
+@pytest.fixture(autouse=True)
+def _disable_external_discovery_flows():
+    """Prevent the BluetoothManager from triggering discovery flows for other integrations.
+
+    The full bluetooth pipeline dispatches advertisements to all registered
+    matchers (e.g. kegtron, ibeacon). Loading their config-flow platforms
+    fails because those integrations aren't installed in the test venv.
+    We patch the manager-level dispatcher so that only **our** integration's
+    flows (fired via ``discovery_flow.async_create_flow`` in coordinator.py)
+    still work, while side-channel dispatches from the HA BluetoothManager
+    are suppressed.
+    """
+    from unittest.mock import patch
+
+    with patch(
+        "homeassistant.components.bluetooth.manager.discovery_flow.async_create_flow"
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +77,10 @@ async def test_env_sensor_battery_entity_created(
     fixture = load_fixture("esphome_env_sensor")
     device = list(fixture["devices"].values())[0]
     synthetic = next(a for a in device["advertisements"] if a.get("_synthetic"))
+
+    # Create a per-device config entry so the sensor platform registers an
+    # ActiveBluetoothProcessorCoordinator for this address.
+    await setup_device_entry(hass, address=device["address"], name=device["name"])
 
     service_info = load_service_info(device, synthetic)
     inject_bluetooth_service_info(hass, service_info)
@@ -111,6 +112,8 @@ async def test_env_sensor_temperature_entity_created(
     fixture = load_fixture("esphome_env_sensor")
     device = list(fixture["devices"].values())[0]
     synthetic = next(a for a in device["advertisements"] if a.get("_synthetic"))
+
+    await setup_device_entry(hass, address=device["address"], name=device["name"])
 
     service_info = load_service_info(device, synthetic)
     inject_bluetooth_service_info(hass, service_info)
@@ -145,6 +148,8 @@ async def test_env_sensor_humidity_entity_created(
     device = list(fixture["devices"].values())[0]
     synthetic = next(a for a in device["advertisements"] if a.get("_synthetic"))
 
+    await setup_device_entry(hass, address=device["address"], name=device["name"])
+
     service_info = load_service_info(device, synthetic)
     inject_bluetooth_service_info(hass, service_info)
     await hass.async_block_till_done()
@@ -177,6 +182,10 @@ async def test_env_sensor_full_replay_creates_entities(
     hass: HomeAssistant, integration_entry: MockConfigEntry
 ) -> None:
     """Replay all advertisements in order; entity count should grow."""
+    fixture = load_fixture("esphome_env_sensor")
+    device = list(fixture["devices"].values())[0]
+    await setup_device_entry(hass, address=device["address"], name=device["name"])
+
     initial_count = len(hass.states.async_all("sensor"))
 
     for service_info in iter_service_infos("esphome_env_sensor"):
@@ -202,6 +211,8 @@ async def test_env_sensor_state_update_on_second_injection(
     fixture = load_fixture("esphome_env_sensor")
     device = list(fixture["devices"].values())[0]
     synthetic = next(a for a in device["advertisements"] if a.get("_synthetic"))
+
+    await setup_device_entry(hass, address=device["address"], name=device["name"])
 
     service_info_1 = load_service_info(device, synthetic)
     inject_bluetooth_service_info(hass, service_info_1)
@@ -310,6 +321,12 @@ async def test_conftest_battery_fixture_through_real_pipeline(
     mock_bluetooth_service_info_battery: Any,
 ) -> None:
     """Existing conftest battery fixture injected through real HA BT pipeline."""
+    await setup_device_entry(
+        hass,
+        address=mock_bluetooth_service_info_battery.address,
+        name=mock_bluetooth_service_info_battery.name,
+    )
+
     states_before = len(hass.states.async_all("sensor"))
 
     inject_bluetooth_service_info(hass, mock_bluetooth_service_info_battery)
@@ -335,6 +352,12 @@ async def test_conftest_temperature_fixture_through_real_pipeline(
     mock_bluetooth_service_info_temperature: Any,
 ) -> None:
     """Existing conftest temperature fixture injected through real HA BT pipeline."""
+    await setup_device_entry(
+        hass,
+        address=mock_bluetooth_service_info_temperature.address,
+        name=mock_bluetooth_service_info_temperature.name,
+    )
+
     inject_bluetooth_service_info(hass, mock_bluetooth_service_info_temperature)
     await hass.async_block_till_done()
     await hass.async_block_till_done()
