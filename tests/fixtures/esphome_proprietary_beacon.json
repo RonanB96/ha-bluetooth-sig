@@ -1,0 +1,445 @@
+{
+  "captured_at": "2026-03-01T16:13:17.083705+00:00",
+  "duration": 15.0,
+  "scanner_source": "hci0",
+  "devices": {
+    "C4:DD:57:75:5C:F6": {
+      "address": "C4:DD:57:75:5C:F6",
+      "name": "dummy-proprietary-be",
+      "advertisements": [
+        {
+          "timestamp": 0.167173,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 0.479605,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.229475,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.542049,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.897541,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.214805,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.439506,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.765469,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.177473,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.169951,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.484753,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.763729,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 5.385445,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 5.661024,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.206448,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.515406,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.83448,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.220694,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.545738,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.243943,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.55146,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.069947,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.659675,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.938655,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.257525,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.484399,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.791599,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.426177,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.84457,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.291912,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.567505,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.87948,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.198482,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.540986,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.816511,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 15.035756,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-proprietary-be",
+          "manufacturer_data": {
+            "65535": "0101efbeadde000000"
+          },
+          "service_data": {},
+          "service_uuids": [],
+          "tx_power": 9
+        }
+      ]
+    }
+  }
+}

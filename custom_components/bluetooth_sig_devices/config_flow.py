@@ -8,11 +8,20 @@ from typing import Any
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.bluetooth import async_scanner_count
-from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 
-from .const import DOMAIN
+from .const import (
+    CONF_POLL_INTERVAL,
+    DEFAULT_POLL_INTERVAL,
+    DOMAIN,
+    MAX_POLL_INTERVAL_SECONDS,
+    MIN_POLL_INTERVAL_SECONDS,
+    DiscoveryData,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+DEFAULT_POLL_INTERVAL_SECONDS = int(DEFAULT_POLL_INTERVAL.total_seconds())
 
 
 class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -20,20 +29,37 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
+    def __init__(self) -> None:
+        """Initialise flow state."""
+        self._discovered_address: str | None = None
+        self._discovered_name: str | None = None
+        self._discovered_characteristics: str = ""
+
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> OptionsFlow:
+        """Return the options flow handler."""
+        return BluetoothSIGDevicesOptionsFlow()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
-        # Check if already configured
-        if self._async_current_entries():
-            return self.async_abort(reason="single_instance_allowed")
+        """Handle the initial step — create the hub entry.
+
+        The hub entry has no device ``address`` in its data.  It starts
+        the scanner coordinator which discovers devices and fires
+        per-device discovery flows.
+        """
+        # Only one hub entry is allowed
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
 
         # Check if Bluetooth is available
         if not async_scanner_count(self.hass, connectable=False):
             return self.async_abort(reason="bluetooth_not_available")
 
         if user_input is not None:
-            # Create the config entry
             return self.async_create_entry(
                 title="Bluetooth SIG Devices",
                 data={},
@@ -48,6 +74,124 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_import(self, import_data: dict[str, Any]) -> ConfigFlowResult:
+    async def async_step_import(
+        self, import_data: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         """Handle import from configuration.yaml."""
-        return await self.async_step_user(import_data)
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+
+        if not async_scanner_count(self.hass, connectable=False):
+            return self.async_abort(reason="bluetooth_not_available")
+
+        return self.async_create_entry(
+            title="Bluetooth SIG Devices",
+            data={},
+        )
+
+    # ------------------------------------------------------------------
+    # Standard discovery flow — triggered by the hub coordinator
+    # ------------------------------------------------------------------
+
+    async def async_step_integration_discovery(
+        self,
+        discovery_info: DiscoveryData,  # type: ignore[override]
+    ) -> ConfigFlowResult:
+        """Handle a device discovered by the hub coordinator.
+
+        The coordinator calls ``discovery_flow.async_create_flow()``
+        with ``source=integration_discovery`` and ``data`` containing
+        the BLE address and device name.
+        """
+        address: str = discovery_info["address"]
+        name: str = discovery_info.get("name") or f"Bluetooth Device {address[-8:]}"
+        characteristics: str = discovery_info.get("characteristics", "")
+
+        _LOGGER.info(
+            "Discovery flow received for device %s (%s)",
+            address,
+            name,
+        )
+
+        # One config entry per BLE address
+        await self.async_set_unique_id(address)
+        self._abort_if_unique_id_configured()
+
+        self._discovered_address = address
+        self._discovered_name = name
+        self._discovered_characteristics = characteristics
+
+        # Title shown in the "Discovered" list
+        self.context["title_placeholders"] = {"name": name}
+
+        return await self.async_step_integration_discovery_confirm()
+
+    async def async_step_integration_discovery_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm addition of a discovered Bluetooth SIG device."""
+        assert self._discovered_address is not None
+        assert self._discovered_name is not None
+
+        if user_input is not None:
+            _LOGGER.info(
+                "User confirmed device %s (%s) — creating config entry",
+                self._discovered_address,
+                self._discovered_name,
+            )
+            return self.async_create_entry(
+                title=self._discovered_name,
+                data={"address": self._discovered_address},
+            )
+
+        return self.async_show_form(
+            step_id="integration_discovery_confirm",
+            description_placeholders={
+                "name": self._discovered_name,
+                "characteristics": self._discovered_characteristics
+                or "Unknown (will be detected after setup)",
+            },
+        )
+
+
+class BluetoothSIGDevicesOptionsFlow(OptionsFlow):
+    """Handle options for Bluetooth SIG Devices."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage the integration options.
+
+        Only the hub entry (no ``address`` in data) has configurable
+        options (poll interval).  Device entries show no options.
+        """
+        # Device entries have no options yet
+        if "address" in self.config_entry.data:
+            return self.async_abort(reason="no_options_available")
+
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current_interval = self.config_entry.options.get(
+            CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL_SECONDS
+        )
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_POLL_INTERVAL): vol.All(
+                    vol.Coerce(int),
+                    vol.Range(
+                        min=MIN_POLL_INTERVAL_SECONDS,
+                        max=MAX_POLL_INTERVAL_SECONDS,
+                    ),
+                ),
+            }
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                schema,
+                {CONF_POLL_INTERVAL: current_interval},
+            ),
+        )

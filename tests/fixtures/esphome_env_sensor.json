@@ -1,0 +1,461 @@
+{
+  "captured_at": "2026-03-01T15:19:20.446942+00:00",
+  "duration": 15.0,
+  "scanner_source": "hci0",
+  "devices": {
+    "C4:DD:57:75:5C:F6": {
+      "address": "C4:DD:57:75:5C:F6",
+      "name": "dummy-env-sensor",
+      "advertisements": [
+        {
+          "timestamp": 0.449163,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 0.726113,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.141764,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.49261,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.711628,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.428374,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.714317,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.990146,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.301204,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.620079,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.03442,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.482199,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.701098,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 5.182402,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.270174,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.859329,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.174201,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.485033,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.760282,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.205046,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.58004,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.70032,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.580653,
+          "connectable": true,
+          "rssi": -100,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.694129,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 11.014269,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 11.557289,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.002235,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.280239,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.500246,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.481709,
+          "connectable": true,
+          "rssi": -97,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.293244,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.510219,
+          "connectable": true,
+          "rssi": -98,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.822244,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 16.0,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-env-sensor",
+          "manufacturer_data": {},
+          "service_data": {
+            "00002a19-0000-1000-8000-00805f9b34fb": "54",
+            "00002a6e-0000-1000-8000-00805f9b34fb": "d309",
+            "00002a6f-0000-1000-8000-00805f9b34fb": "f515"
+          },
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "0000181a-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": null,
+          "_synthetic": true,
+          "_source": "gatt_read"
+        }
+      ]
+    }
+  }
+}

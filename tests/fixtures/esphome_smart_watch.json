@@ -1,0 +1,793 @@
+{
+  "captured_at": "2026-03-01T19:22:35.458622+00:00",
+  "duration": 15.0,
+  "scanner_source": "hci0",
+  "devices": {
+    "C4:DD:57:75:5C:F6": {
+      "address": "C4:DD:57:75:5C:F6",
+      "name": "dummy-smart-watch",
+      "gatt_services": [
+        {
+          "uuid": "0000180f-0000-1000-8000-00805f9b34fb",
+          "handle": 52,
+          "description": "Battery Service",
+          "characteristics": [
+            {
+              "uuid": "00002a19-0000-1000-8000-00805f9b34fb",
+              "handle": 53,
+              "description": "Battery Level",
+              "properties": ["read", "notify"],
+              "raw_value": "52"
+            }
+          ]
+        },
+        {
+          "uuid": "00001805-0000-1000-8000-00805f9b34fb",
+          "handle": 47,
+          "description": "Current Time Service",
+          "characteristics": [
+            {
+              "uuid": "00002a2b-0000-1000-8000-00805f9b34fb",
+              "handle": 48,
+              "description": "Current Time",
+              "properties": ["read", "notify"],
+              "raw_value": "ea0702060c002c040000"
+            }
+          ]
+        },
+        {
+          "uuid": "00001801-0000-1000-8000-00805f9b34fb",
+          "handle": 1,
+          "description": "Generic Attribute Profile",
+          "characteristics": [
+            {
+              "uuid": "00002a05-0000-1000-8000-00805f9b34fb",
+              "handle": 2,
+              "description": "Service Changed",
+              "properties": ["indicate"],
+              "raw_value": null
+            }
+          ]
+        },
+        {
+          "uuid": "0000180a-0000-1000-8000-00805f9b34fb",
+          "handle": 40,
+          "description": "Device Information",
+          "characteristics": [
+            {
+              "uuid": "00002a29-0000-1000-8000-00805f9b34fb",
+              "handle": 41,
+              "description": "Manufacturer Name String",
+              "properties": ["read"],
+              "raw_value": "4578616d706c6520436f7270"
+            },
+            {
+              "uuid": "00002a24-0000-1000-8000-00805f9b34fb",
+              "handle": 43,
+              "description": "Model Number String",
+              "properties": ["read"],
+              "raw_value": "6573703332646576"
+            },
+            {
+              "uuid": "00002a26-0000-1000-8000-00805f9b34fb",
+              "handle": 45,
+              "description": "Firmware Revision String",
+              "properties": ["read"],
+              "raw_value": "455350486f6d6520323032352e372e35"
+            }
+          ]
+        }
+      ],
+      "advertisements": [
+        {
+          "timestamp": 0.190255,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 0.461123,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 0.784979,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.009898,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.282023,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.559049,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 1.784126,
+          "connectable": true,
+          "rssi": -105,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.400182,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.679159,
+          "connectable": true,
+          "rssi": -105,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 2.998998,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.216986,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.527142,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 3.87001,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.142693,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.727112,
+          "connectable": true,
+          "rssi": -105,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 4.944461,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 5.246416,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 5.79418,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.204104,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.624239,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 6.936015,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.254063,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.531169,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 7.84715,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.512577,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 8.789162,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.136263,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.45918,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 9.771606,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.22114,
+          "connectable": true,
+          "rssi": -106,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.486281,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 10.794171,
+          "connectable": true,
+          "rssi": -103,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 11.239417,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 11.554254,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 11.859008,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.139091,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.461093,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 12.810142,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.119113,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.440017,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 13.755071,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.033146,
+          "connectable": true,
+          "rssi": -101,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.310382,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.615297,
+          "connectable": true,
+          "rssi": -104,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 14.834218,
+          "connectable": true,
+          "rssi": -102,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 15.15043,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {
+            "65535": "0100"
+          },
+          "service_data": {},
+          "service_uuids": [
+            "0000180f-0000-1000-8000-00805f9b34fb",
+            "00001805-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": 9
+        },
+        {
+          "timestamp": 16.0,
+          "connectable": true,
+          "rssi": -99,
+          "local_name": "dummy-smart-watch",
+          "manufacturer_data": {},
+          "service_data": {
+            "00002a19-0000-1000-8000-00805f9b34fb": "52",
+            "00002a2b-0000-1000-8000-00805f9b34fb": "ea0702060c0028040000"
+          },
+          "service_uuids": [
+            "00001805-0000-1000-8000-00805f9b34fb",
+            "0000180f-0000-1000-8000-00805f9b34fb"
+          ],
+          "tx_power": null,
+          "_synthetic": true,
+          "_source": "gatt_read"
+        }
+      ]
+    }
+  }
+}
