@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 dependencies = ["bluetooth-sig>=0.2.0"]
 
 [project.optional-dependencies]
-test = ["pytest-homeassistant-custom-component", "pyserial", "aiousbwatcher"]
+test = ["pytest-homeassistant-custom-component", "pyserial", "aiousbwatcher", "pyudev"]
 dev = ["ruff>=0.8.0", "mypy>=1.13.0"]
 
 [tool.pytest.ini_options]
