@@ -183,10 +183,10 @@ class AdvertisementManager:
                 security_manager_oob_flags=b"",
             ),
             location=LocationAndSensingData(
-                indoor_positioning=b"",
-                three_d_information=b"",
-                transport_discovery_data=b"",
-                channel_map_update_indication=b"",
+                indoor_positioning=None,
+                three_d_information=None,
+                transport_discovery_data=None,
+                channel_map_update_indication=None,
             ),
             mesh=MeshAndBroadcastData(
                 mesh_message=None,

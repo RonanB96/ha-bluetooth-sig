@@ -8,18 +8,11 @@ version = "0.1.0"
 description = "Home Assistant integration for Bluetooth SIG devices"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "bluetooth-sig>=0.2.0",
-]
+dependencies = ["bluetooth-sig>=0.2.0"]
 
 [project.optional-dependencies]
-test = [
-    "pytest-homeassistant-custom-component",
-]
-dev = [
-    "ruff>=0.8.0",
-    "mypy>=1.13.0",
-]
+test = ["pytest-homeassistant-custom-component", "pyserial", "aiousbwatcher"]
+dev = ["ruff>=0.8.0", "mypy>=1.13.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

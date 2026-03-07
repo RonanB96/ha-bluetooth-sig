@@ -257,16 +257,16 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 security_manager_oob_flags=b"",
             ),
             location=LocationAndSensingData(
-                indoor_positioning=b"",
-                three_d_information=b"",
-                transport_discovery_data=b"",
-                channel_map_update_indication=b"",
+                indoor_positioning=None,
+                three_d_information=None,
+                transport_discovery_data=None,
+                channel_map_update_indication=None,
             ),
             mesh=MeshAndBroadcastData(
-                mesh_message=b"",
-                secure_network_beacon=b"",
-                unprovisioned_device_beacon=b"",
-                provisioning_bearer=b"",
+                mesh_message=None,
+                secure_network_beacon=None,
+                unprovisioned_device_beacon=None,
+                provisioning_bearer=None,
                 broadcast_name="",
                 broadcast_code=b"",
                 biginfo=b"",
@@ -482,7 +482,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             self._is_connected = True
             self._mtu_size = self._client.mtu_size
             # Try to acquire MTU to avoid warnings
-            if hasattr(self._client, '_acquire_mtu'):
+            if hasattr(self._client, "_acquire_mtu"):
                 try:
                     await self._client._acquire_mtu()
                     self._mtu_size = self._client.mtu_size
@@ -574,7 +574,9 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 # Get characteristic class from registry
                 # Run in executor to avoid blocking I/O in event loop
                 char_class = await asyncio.get_event_loop().run_in_executor(
-                    None, CharacteristicRegistry.get_characteristic_class_by_uuid, char_uuid
+                    None,
+                    CharacteristicRegistry.get_characteristic_class_by_uuid,
+                    char_uuid,
                 )
                 if char_class:
                     # Create characteristic instance with runtime properties from device.

@@ -74,8 +74,8 @@ def to_ha_state(value: object) -> int | float | str | bool:
         return value
     if isinstance(value, enum.IntFlag):  # must be before .name check
         return int(value)
-    if getattr(value, "name", None) is not None:  # IntEnum, Enum, etc.
-        return value.name
+    if (name := getattr(value, "name", None)) is not None:  # IntEnum, Enum, etc.
+        return str(name)
     if isinstance(value, int):
         return int(value)
     if isinstance(value, float):

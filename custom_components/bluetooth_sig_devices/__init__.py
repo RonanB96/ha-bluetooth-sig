@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import homeassistant.helpers.config_validation as cv
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STARTED, Platform
@@ -20,6 +21,8 @@ type BluetoothSIGConfigEntry = ConfigEntry[BluetoothSIGCoordinator]
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
 def _is_hub_entry(entry: ConfigEntry) -> bool:
@@ -102,9 +105,7 @@ async def _async_setup_device_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
     hub_data = hass.data.get(DOMAIN, {})
     coordinator = hub_data.get("coordinator")
     if coordinator is None:
-        raise ConfigEntryNotReady(
-            "Discovery hub not yet loaded — will retry"
-        )
+        raise ConfigEntryNotReady("Discovery hub not yet loaded — will retry")
 
     # Store coordinator reference for use by sensor platform
     entry.runtime_data = coordinator
