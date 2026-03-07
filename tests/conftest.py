@@ -181,14 +181,21 @@ def mock_bluetooth_disabled() -> Generator[None]:
 
     Patches ``async_setup`` and ``async_setup_entry`` so that HA never
     attempts real hardware or D-Bus access when loading the ``bluetooth``
-    dependency.  Also patches ``async_scanner_count`` at the component level
-    AND at the config-flow import site so availability checks pass.
+    dependency.  Also patches the ``usb`` component (a transitive dependency
+    of ``bluetooth``) to prevent ``pyudev`` import failures in CI.  Patches
+    ``async_scanner_count`` at the component level AND at the config-flow
+    import site so availability checks pass.
 
     Do NOT use this in tests that also request the ``enable_bluetooth``
     fixture — ``enable_bluetooth`` needs the real (framework-mocked) Bluetooth
     setup to create a live ``BluetoothManager``.
     """
     with (
+        patch(
+            "homeassistant.components.usb.async_setup",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch(
             "homeassistant.components.bluetooth.async_setup",
             new_callable=AsyncMock,

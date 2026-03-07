@@ -186,18 +186,36 @@ class TestClassifyRandomAddress:
 
     def test_random_static(self) -> None:
         """0xC0–0xFF → RANDOM_STATIC."""
-        assert _classify_random_address("C0:11:22:33:44:55") == BLEAddressType.RANDOM_STATIC
-        assert _classify_random_address("FF:AA:BB:CC:DD:EE") == BLEAddressType.RANDOM_STATIC
+        assert (
+            _classify_random_address("C0:11:22:33:44:55")
+            == BLEAddressType.RANDOM_STATIC
+        )
+        assert (
+            _classify_random_address("FF:AA:BB:CC:DD:EE")
+            == BLEAddressType.RANDOM_STATIC
+        )
 
     def test_resolvable_private(self) -> None:
         """0x40–0x7F → RESOLVABLE_PRIVATE."""
-        assert _classify_random_address("40:00:00:00:00:00") == BLEAddressType.RESOLVABLE_PRIVATE
-        assert _classify_random_address("7F:FF:FF:FF:FF:FF") == BLEAddressType.RESOLVABLE_PRIVATE
+        assert (
+            _classify_random_address("40:00:00:00:00:00")
+            == BLEAddressType.RESOLVABLE_PRIVATE
+        )
+        assert (
+            _classify_random_address("7F:FF:FF:FF:FF:FF")
+            == BLEAddressType.RESOLVABLE_PRIVATE
+        )
 
     def test_non_resolvable_private(self) -> None:
         """0x00–0x3F → NON_RESOLVABLE_PRIVATE."""
-        assert _classify_random_address("00:11:22:33:44:55") == BLEAddressType.NON_RESOLVABLE_PRIVATE
-        assert _classify_random_address("3F:AA:BB:CC:DD:EE") == BLEAddressType.NON_RESOLVABLE_PRIVATE
+        assert (
+            _classify_random_address("00:11:22:33:44:55")
+            == BLEAddressType.NON_RESOLVABLE_PRIVATE
+        )
+        assert (
+            _classify_random_address("3F:AA:BB:CC:DD:EE")
+            == BLEAddressType.NON_RESOLVABLE_PRIVATE
+        )
 
     def test_reserved(self) -> None:
         """0x80–0xBF (reserved) → UNKNOWN."""

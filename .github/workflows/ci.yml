@@ -1,0 +1,82 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DEFAULT_PYTHON: "3.12"
+
+jobs:
+  # ── Ruff lint & format check ───────────────────────────────────────
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+      - name: Install ruff
+        run: pip install 'ruff>=0.8.0'
+      - name: Ruff check
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check .
+
+  # ── mypy strict type checking ──────────────────────────────────────
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -e ".[test,dev]"
+      - name: Run mypy
+        run: mypy custom_components/bluetooth_sig_devices
+
+  # ── pytest with coverage ───────────────────────────────────────────
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -e ".[test,dev]"
+      - name: Run tests
+        run: >-
+          pytest tests/ -v
+          --cov=custom_components/bluetooth_sig_devices
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          -x
+      - name: Upload coverage
+        if: matrix.python-version == '3.12' && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.types.uuid import BluetoothUUID
 
@@ -81,7 +81,7 @@ def classify_ble_address(
     is_random = False
 
     if hasattr(device, "details") and isinstance(device.details, dict):
-        details: dict = device.details
+        details: dict[str, Any] = device.details
 
         # --- BlueZ format: {"props": {"AddressType": "random"|"public"}} ---
         props = details.get("props", {})

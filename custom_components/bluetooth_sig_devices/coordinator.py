@@ -33,7 +33,7 @@ from bluetooth_sig.gatt.services.registry import GattServiceRegistry
 from bluetooth_sig.registry.company_identifiers import (
     company_identifiers_registry,
 )
-from bluetooth_sig.registry.uuids.units import UnitsRegistry, units_registry
+from bluetooth_sig.registry.uuids.units import UnitsRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
@@ -96,6 +96,8 @@ class BluetoothSIGCoordinator:
     to discover characteristics that can be parsed by the library.
     """
 
+    _cached_excluded_uuids: tuple[frozenset[str], frozenset[str]] | None = None
+
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry, *, poll_interval: int = 300
     ) -> None:
@@ -110,7 +112,7 @@ class BluetoothSIGCoordinator:
         self.known_characteristics: dict[str, dict[str, str]] = {}
 
         # Retrieve excluded UUIDs built during prewarm_registries().
-        if hasattr(BluetoothSIGCoordinator, "_cached_excluded_uuids"):
+        if BluetoothSIGCoordinator._cached_excluded_uuids is not None:
             self._excluded_service_uuids, self._excluded_char_uuids = (
                 BluetoothSIGCoordinator._cached_excluded_uuids
             )
@@ -216,8 +218,7 @@ class BluetoothSIGCoordinator:
         GattServiceRegistry.get_all_services()
         GattServiceRegistry.get_service_class_by_uuid(BluetoothUUID("0000"))
         CharacteristicRegistry.get_characteristic_class_by_uuid(BluetoothUUID("0000"))
-        units_registry.get_all_units()
-        UnitsRegistry.get_instance().get_all_units()
+        UnitsRegistry.get_instance().get_all_units()  # type: ignore[attr-defined]
         company_identifiers_registry._ensure_loaded()
 
         BluetoothSIGCoordinator._cached_excluded_uuids = (
@@ -385,9 +386,7 @@ class BluetoothSIGCoordinator:
         # in _async_poll).  It is populated by the initial replay in
         # async_register_callback at startup.
         if proc._last_service_info is None:  # noqa: SLF001
-            _LOGGER.debug(
-                "Cannot trigger poll for %s — no last service info", address
-            )
+            _LOGGER.debug("Cannot trigger poll for %s — no last service info", address)
             return
         _LOGGER.debug(
             "Triggering immediate poll for %s after successful probe", address
@@ -416,7 +415,9 @@ class BluetoothSIGCoordinator:
             address,
             service_info.name or "unknown",
             service_info.rssi,
-            len(service_info.manufacturer_data) if service_info.manufacturer_data else 0,
+            len(service_info.manufacturer_data)
+            if service_info.manufacturer_data
+            else 0,
             len(service_info.service_data) if service_info.service_data else 0,
         )
 

@@ -159,7 +159,7 @@ class SupportDetector:
                         found.append(
                             CharacteristicInfo(
                                 uuid=char_uuid_str,
-                                name=char_spec.name or char_uuid_str,
+                                name=getattr(char_spec, "name", None) or char_uuid_str,
                             )
                         )
                     continue

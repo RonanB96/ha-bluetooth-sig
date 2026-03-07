@@ -405,7 +405,7 @@ class GATTManager:
 
         for char_uuid in probe_result.supported_char_uuids:
             try:
-                parsed_value = await device.read(str(char_uuid))  # type: ignore[union-attr]
+                parsed_value = await device.read(str(char_uuid))  # type: ignore[attr-defined]
                 if parsed_value is None:
                     continue
 
