@@ -50,7 +50,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
-from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
+from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
     def __init__(
         self,
-        address: str,
+        address: BLEAddress,
         name: str = "",
         *,
         hass: HomeAssistant | None = None,
@@ -543,11 +543,13 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
             # Get service class from registry or create a base service
             # Run in executor to avoid blocking I/O in event loop
-            service_class = await asyncio.get_event_loop().run_in_executor(
+            service_class: (
+                type[BaseGattService] | None
+            ) = await asyncio.get_event_loop().run_in_executor(
                 None, GattServiceRegistry.get_service_class_by_uuid, service_uuid
             )
             if service_class:
-                service_instance = service_class()
+                service_instance: BaseGattService = service_class()
             else:
                 # Create a generic service for unknown UUIDs
                 service_info = ServiceInfo(
@@ -573,7 +575,9 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
                 # Get characteristic class from registry
                 # Run in executor to avoid blocking I/O in event loop
-                char_class = await asyncio.get_event_loop().run_in_executor(
+                char_class: (
+                    type[BaseCharacteristic[Any]] | None
+                ) = await asyncio.get_event_loop().run_in_executor(
                     None,
                     CharacteristicRegistry.get_characteristic_class_by_uuid,
                     char_uuid,
@@ -583,7 +587,9 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                     # Some library characteristic classes (e.g. CurrentTimeCharacteristic)
                     # do not accept 'properties' — fall back to no-arg construction.
                     try:
-                        char_instance = char_class(properties=properties)
+                        char_instance: BaseCharacteristic[Any] = char_class(
+                            properties=properties
+                        )
                     except TypeError:
                         _LOGGER.debug(
                             "Characteristic %s does not accept properties kwarg, "

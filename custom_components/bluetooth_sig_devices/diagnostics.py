@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 
 from . import BluetoothSIGConfigEntry
 from .const import (
+    BLEAddress,
     DeviceStatistics,
     DiagnosticsSnapshot,
     GATTProbeSnapshotData,
@@ -19,9 +20,9 @@ class _DiagnosticsData(TypedDict):
 
     options: dict[str, Any]
     device_statistics: DeviceStatistics
-    gatt_probe_results: dict[str, GATTProbeSnapshotData]
-    probe_failures: dict[str, int]
-    known_characteristics: dict[str, list[str]]
+    gatt_probe_results: dict[BLEAddress, GATTProbeSnapshotData]
+    probe_failures: dict[BLEAddress, int]
+    known_characteristics: dict[BLEAddress, list[str]]
 
 
 async def async_get_config_entry_diagnostics(

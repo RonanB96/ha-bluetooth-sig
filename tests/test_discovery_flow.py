@@ -65,6 +65,7 @@ class TestIntegrationDiscoveryFlow:
                 "address": DEVICE_ADDRESS,
                 "name": DEVICE_NAME,
                 "characteristics": "Battery Level, Temperature",
+                "manufacturer": "",
             },
         )
 
@@ -72,6 +73,7 @@ class TestIntegrationDiscoveryFlow:
         assert result["step_id"] == "integration_discovery_confirm"
         placeholders = result["description_placeholders"]
         assert placeholders["characteristics"] == "Battery Level, Temperature"
+        assert placeholders["manufacturer"] == ""
 
     async def test_discovery_without_characteristics_shows_fallback(
         self,
@@ -88,6 +90,28 @@ class TestIntegrationDiscoveryFlow:
         assert result["type"] == FlowResultType.FORM
         placeholders = result["description_placeholders"]
         assert "Unknown" in placeholders["characteristics"]
+        assert placeholders["manufacturer"] == ""
+
+    async def test_discovery_shows_manufacturer_placeholder(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When manufacturer is provided, a formatted placeholder appears."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "Acme Corp",
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert placeholders["manufacturer"] == "\nManufacturer: **Acme Corp**"
 
     async def test_discovery_confirm_createsmake_device_entry(
         self,

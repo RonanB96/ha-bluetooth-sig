@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 from enum import Enum
-from typing import NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict
+
+from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
+
+# ---------------------------------------------------------------------------
+# Strict type aliases
+# ---------------------------------------------------------------------------
+type BLEAddress = str
 
 DOMAIN = "bluetooth_sig_devices"
 
@@ -80,19 +87,32 @@ STALE_DEVICE_TIMEOUT_SECONDS = 3600  # 1 hour
 # ---------------------------------------------------------------------------
 
 
-class CharacteristicInfo(NamedTuple):
+class CharacteristicSource(Enum):
+    """How a characteristic was discovered.
+
+    Mirrors ``bluetooth_sig.advertising.DataSource`` for the passive
+    advertisement path and adds ``GATT`` for the active connection path.
+    """
+
+    ADVERTISEMENT = "advertisement"
+    MANUFACTURER = "manufacturer"
+    GATT = "gatt"
+
+
+class DiscoveredCharacteristic(NamedTuple):
     """A discovered characteristic's UUID and human-readable name."""
 
-    uuid: str
-    name: str
+    characteristic: BaseCharacteristic[Any]
+    source: CharacteristicSource = CharacteristicSource.ADVERTISEMENT
 
 
 class DiscoveryData(TypedDict):
     """Data passed to ``discovery_flow.async_create_flow``."""
 
-    address: str
+    address: BLEAddress
     name: str
     characteristics: str
+    manufacturer: str
 
 
 class GATTProbeSnapshotData(TypedDict):
@@ -120,6 +140,6 @@ class DiagnosticsSnapshot(TypedDict):
     """Complete diagnostics snapshot returned by the coordinator."""
 
     device_statistics: DeviceStatistics
-    gatt_probe_results: dict[str, GATTProbeSnapshotData]
-    probe_failures: dict[str, int]
-    known_characteristics: dict[str, list[str]]
+    gatt_probe_results: dict[BLEAddress, GATTProbeSnapshotData]
+    probe_failures: dict[BLEAddress, int]
+    known_characteristics: dict[BLEAddress, list[str]]

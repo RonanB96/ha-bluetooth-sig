@@ -34,6 +34,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_address: str | None = None
         self._discovered_name: str | None = None
         self._discovered_characteristics: str = ""
+        self._discovered_manufacturer: str = ""
 
     @staticmethod
     def async_get_options_flow(
@@ -106,6 +107,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         address: str = discovery_info["address"]
         name: str = discovery_info.get("name") or f"Bluetooth Device {address[-8:]}"
         characteristics: str = discovery_info.get("characteristics", "")
+        manufacturer: str = discovery_info.get("manufacturer", "")
 
         _LOGGER.info(
             "Discovery flow received for device %s (%s)",
@@ -120,6 +122,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_address = address
         self._discovered_name = name
         self._discovered_characteristics = characteristics
+        self._discovered_manufacturer = manufacturer
 
         # Title shown in the "Discovered" list
         self.context["title_placeholders"] = {"name": name}
@@ -148,6 +151,11 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="integration_discovery_confirm",
             description_placeholders={
                 "name": self._discovered_name,
+                "manufacturer": (
+                    f"\nManufacturer: **{self._discovered_manufacturer}**"
+                    if self._discovered_manufacturer
+                    else ""
+                ),
                 "characteristics": self._discovered_characteristics
                 or "Unknown (will be detected after setup)",
             },

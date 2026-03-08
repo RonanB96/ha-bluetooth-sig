@@ -19,6 +19,7 @@ from .const import (
     MAX_SEEN_DEVICES,
     STALE_DEVICE_CLEANUP_INTERVAL,
     STALE_DEVICE_TIMEOUT_SECONDS,
+    BLEAddress,
 )
 
 if TYPE_CHECKING:
@@ -48,10 +49,10 @@ class DiscoveryTracker:
         self._hass = hass
         self._coordinator = coordinator
 
-        self.seen_devices: set[str] = set()
-        self.rejected_devices: set[str] = set()
-        self.discovery_triggered: set[str] = set()
-        self.last_seen_time: dict[str, float] = {}
+        self.seen_devices: set[BLEAddress] = set()
+        self.rejected_devices: set[BLEAddress] = set()
+        self.discovery_triggered: set[BLEAddress] = set()
+        self.last_seen_time: dict[BLEAddress, float] = {}
         self.filtered_ephemeral_count: int = 0
 
         self._cancel_stale_cleanup: CALLBACK_TYPE | None = None
@@ -60,24 +61,24 @@ class DiscoveryTracker:
     # Query helpers
     # ------------------------------------------------------------------
 
-    def is_rejected(self, address: str) -> bool:
+    def is_rejected(self, address: BLEAddress) -> bool:
         """Return True if the address has been rejected."""
         return address in self.rejected_devices
 
-    def is_discovery_triggered(self, address: str) -> bool:
+    def is_discovery_triggered(self, address: BLEAddress) -> bool:
         """Return True if a discovery flow was already fired for this address."""
         return address in self.discovery_triggered
 
-    def mark_discovery_triggered(self, address: str) -> None:
+    def mark_discovery_triggered(self, address: BLEAddress) -> None:
         """Record that a discovery flow has been fired for *address*."""
         self.discovery_triggered.add(address)
 
-    def mark_rejected(self, address: str) -> None:
+    def mark_rejected(self, address: BLEAddress) -> None:
         """Mark *address* as fully evaluated with no support."""
         if len(self.rejected_devices) < MAX_REJECTED_DEVICES:
             self.rejected_devices.add(address)
 
-    def record_sighting(self, address: str) -> bool:
+    def record_sighting(self, address: BLEAddress) -> bool:
         """Record that *address* was seen in an advertisement.
 
         Returns True if this is the first sighting for this address.
@@ -144,7 +145,7 @@ class DiscoveryTracker:
         cutoff = now - STALE_DEVICE_TIMEOUT_SECONDS
 
         coord = self._coordinator
-        stale_addresses: list[str] = [
+        stale_addresses: list[BLEAddress] = [
             addr
             for addr, last_seen in self.last_seen_time.items()
             if last_seen < cutoff
@@ -205,6 +206,6 @@ class DiscoveryTracker:
         self.discovery_triggered.clear()
         self.last_seen_time.clear()
 
-    def remove_device(self, address: str) -> None:
+    def remove_device(self, address: BLEAddress) -> None:
         """Allow re-discovery if a device's config entry is removed."""
         self.discovery_triggered.discard(address)

@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import _is_hub_entry
+from .const import BLEAddress
 from .coordinator import BluetoothSIGCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ async def async_setup_entry(
         return
 
     coordinator: BluetoothSIGCoordinator = entry.runtime_data
-    address: str = entry.data["address"]
+    address: BLEAddress = entry.data["address"]
 
     coordinator.create_device_processor(
         address, entry, async_add_entities, BluetoothSIGSensorEntity

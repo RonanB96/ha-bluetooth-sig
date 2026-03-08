@@ -5,6 +5,9 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
+from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
+from bluetooth_sig.types.data_types import CharacteristicInfo
+from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataUpdate,
@@ -13,7 +16,8 @@ from homeassistant.components.sensor import SensorDeviceClass
 
 from custom_components.bluetooth_sig_devices.const import (
     STALE_DEVICE_TIMEOUT_SECONDS,
-    CharacteristicInfo,
+    CharacteristicSource,
+    DiscoveredCharacteristic,
 )
 from custom_components.bluetooth_sig_devices.coordinator import (
     BluetoothSIGCoordinator,
@@ -467,11 +471,12 @@ class TestGetSupportedCharacteristics:
         )
 
         assert len(result) > 0
-        # Each result is (uuid_str, name) tuple
-        for uuid_str, name in result:
-            assert isinstance(uuid_str, str)
-            assert isinstance(name, str)
-            assert len(name) > 0
+        # Each result is a DiscoveredCharacteristic named tuple
+        for info in result:
+            assert isinstance(info.characteristic.uuid, BluetoothUUID)
+            assert isinstance(info.characteristic.name, str)
+            assert len(info.characteristic.name) > 0
+            assert isinstance(info.source, CharacteristicSource)
 
     def test_returns_empty_for_unknown_data(
         self,
@@ -544,7 +549,7 @@ class TestGetSupportedCharacteristics:
             service_info
         )
         assert len(result) >= 1
-        names = [name for _, name in result]
+        names = [info.characteristic.name for info in result]
         # Should contain a non-empty name string
         assert all(len(n) > 0 for n in names)
 
@@ -570,22 +575,38 @@ class TestKnownCharacteristics:
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
         supported = [
-            CharacteristicInfo(uuid="uuid1", name="Temperature"),
-            CharacteristicInfo(uuid="uuid2", name="Humidity"),
+            DiscoveredCharacteristic(
+                characteristic=UnknownCharacteristic(
+                    info=CharacteristicInfo(
+                        uuid=BluetoothUUID(0x2A6E),
+                        name="Temperature",
+                    )
+                ),
+            ),
+            DiscoveredCharacteristic(
+                characteristic=UnknownCharacteristic(
+                    info=CharacteristicInfo(
+                        uuid=BluetoothUUID(0x2A6F),
+                        name="Humidity",
+                    )
+                ),
+            ),
         ]
         result = coordinator._build_characteristics_summary(
             "AA:BB:CC:DD:EE:FF", supported
         )
 
-        assert "Temperature" in result
-        assert "Humidity" in result
+        expected = "**Advertising data:**\n  \u2022 Temperature\n  \u2022 Humidity"
+        assert result == expected
         assert "AA:BB:CC:DD:EE:FF" in coordinator.known_characteristics
+        temp_uuid_str = str(BluetoothUUID(0x2A6E))
+        humidity_uuid_str = str(BluetoothUUID(0x2A6F))
         assert (
-            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid1"]
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][temp_uuid_str]
             == "Temperature"
         )
         assert (
-            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid2"]
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][humidity_uuid_str]
             == "Humidity"
         )
 

@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import enum
 import logging
+from typing import Any
 
 from bluetooth_sig.advertising import SIGCharacteristicData
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
+from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.exceptions import SpecialValueDetectedError
 from bluetooth_sig.types.gatt_enums import CharacteristicRole
@@ -340,7 +342,9 @@ def add_sig_characteristic_entity(
     - UNKNOWN           → fall back to value-type heuristic
     """
     # Get characteristic class and metadata from registry
-    char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(data.uuid)
+    char_class: type[BaseCharacteristic[Any]] | None = (
+        CharacteristicRegistry.get_characteristic_class_by_uuid(data.uuid)
+    )
     if char_class is None:
         _LOGGER.debug(
             "No characteristic class found for UUID %s on device %s",
@@ -349,10 +353,10 @@ def add_sig_characteristic_entity(
         )
         return
 
-    char_instance = char_class()
-    char_name = char_instance.name
-    unit = char_instance.unit
-    role = char_instance.role
+    char_instance: BaseCharacteristic[Any] = char_class()
+    char_name: str = char_instance.name
+    unit: str = char_instance.unit
+    role: CharacteristicRole = char_instance.role
     parsed_value = data.parsed_value
 
     uuid_obj = (
@@ -479,11 +483,11 @@ def add_service_data_entities(
                 continue
 
             # Use role to gate service data entities
-            char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-                service_uuid
+            char_class: type[BaseCharacteristic[Any]] | None = (
+                CharacteristicRegistry.get_characteristic_class_by_uuid(service_uuid)
             )
             if char_class is not None:
-                role = char_class().role
+                role: CharacteristicRole = char_class().role
                 if role in SKIP_ROLES:
                     _LOGGER.debug(
                         "Skipping service data %s (role=%s)",

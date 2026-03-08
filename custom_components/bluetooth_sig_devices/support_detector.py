@@ -11,15 +11,21 @@ support detection — ``BluetoothSIGCoordinator`` delegates here.
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
+from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
+from bluetooth_sig.types.data_types import CharacteristicInfo
+from bluetooth_sig.types.gatt_enums import CharacteristicName
+from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 from .advertisement_manager import AdvertisementManager
-from .const import CharacteristicInfo
+from .const import BLEAddress, CharacteristicSource, DiscoveredCharacteristic
 
 if TYPE_CHECKING:
     from .gatt_manager import GATTManager
@@ -56,55 +62,111 @@ class SupportDetector:
     def get_supported_characteristics(
         self,
         service_info: BluetoothServiceInfoBleak,
-    ) -> list[CharacteristicInfo]:
+    ) -> list[DiscoveredCharacteristic]:
         """Return parseable characteristics from advertisement data.
 
-        Returns a list of ``CharacteristicInfo`` named tuples for each
+        Returns a list of ``DiscoveredCharacteristic`` named tuples for each
         supported characteristic detected in the advertisement or cached
         GATT probe.  An empty list means no supported data was found.
+
+        Manufacturer data (interpreted via library interpreters) is **not**
+        included here because it does not map to real GATT characteristics.
+        Use ``check_manufacturer_support`` for that.
         """
         address = service_info.address
-        found: list[CharacteristicInfo] = []
+        found: list[DiscoveredCharacteristic] = []
 
         if service_info.service_data:
             found.extend(self._check_service_data(address, service_info))
 
-        if service_info.manufacturer_data:
-            found.extend(self._check_manufacturer_data(address, service_info))
-
         found.extend(self._check_gatt_probes(address))
 
         return found
+
+    def check_manufacturer_support(
+        self,
+        service_info: BluetoothServiceInfoBleak,
+    ) -> str | None:
+        """Return interpreter name if manufacturer data is parseable, else None."""
+        if not service_info.manufacturer_data:
+            return None
+        try:
+            advertisement = AdvertisementManager.convert_advertisement(service_info)
+            if advertisement.interpreted_data is not None:
+                _LOGGER.debug(
+                    "Device %s has interpreted manufacturer data: %s",
+                    service_info.address,
+                    type(advertisement.interpreted_data).__name__,
+                )
+                return advertisement.interpreter_name or "Manufacturer Data"
+        except Exception as exc:
+            _LOGGER.debug(
+                "Device %s failed to parse manufacturer data: %s",
+                service_info.address,
+                exc,
+            )
+        return None
 
     def has_supported_data(
         self,
         service_info: BluetoothServiceInfoBleak,
     ) -> bool:
         """Check if the device advertisement contains data we can parse."""
-        return len(self.get_supported_characteristics(service_info)) > 0
+        if self.get_supported_characteristics(service_info):
+            return True
+        return self.check_manufacturer_support(service_info) is not None
 
     def build_characteristics_summary(
         self,
-        address: str,
-        supported: list[CharacteristicInfo],
-        known_characteristics: dict[str, dict[str, str]],
+        address: BLEAddress,
+        supported: list[DiscoveredCharacteristic],
+        known_characteristics: dict[BLEAddress, dict[str, str]],
+        manufacturer_name: str = "",
     ) -> str:
-        """Build a formatted characteristics string and update tracking.
+        """Build a formatted characteristics string grouped by source.
 
         Accumulates discovered characteristic names in
-        *known_characteristics* and returns a comma-separated summary.
+        *known_characteristics* and returns a multi-line summary
+        grouped by data source (advertisement, manufacturer, GATT).
         """
         device_chars = known_characteristics.setdefault(address, {})
         for info in supported:
-            device_chars[info.uuid] = info.name
+            device_chars[str(info.characteristic.uuid)] = info.characteristic.name
 
-        unique_names = list(dict.fromkeys(device_chars.values()))
-        return ", ".join(unique_names)
+        # Group by source, preserving insertion order and deduplicating names
+        adv_names: list[str] = []
+        gatt_names: list[str] = []
+        seen: set[str] = set()
+
+        for info in supported:
+            name = info.characteristic.name
+            if name in seen:
+                continue
+            seen.add(name)
+            if info.source is CharacteristicSource.GATT:
+                gatt_names.append(name)
+            else:
+                adv_names.append(name)
+
+        sections: list[str] = []
+
+        if adv_names:
+            lines = "\n".join(f"  \u2022 {n}" for n in adv_names)
+            sections.append(f"**Advertising data:**\n{lines}")
+
+        if manufacturer_name:
+            sections.append(f"**Manufacturer data:**\n  \u2022 {manufacturer_name}")
+
+        if gatt_names:
+            lines = "\n".join(f"  \u2022 {n}" for n in gatt_names)
+            sections.append(f"**Connected (GATT) data:**\n{lines}")
+
+        return "\n\n".join(sections) if sections else ""
 
     def get_known_characteristics(
         self,
-        address: str,
-        known_characteristics: dict[str, dict[str, str]],
+        address: BLEAddress,
+        known_characteristics: dict[BLEAddress, dict[str, str]],
     ) -> dict[str, str]:
         """Return ``{uuid_str: human_name}`` for all known characteristics."""
         result = dict(known_characteristics.get(address, {}))
@@ -115,7 +177,7 @@ class SupportDetector:
             for char_uuid in probe_result.supported_char_uuids:
                 uuid_str = str(char_uuid)
                 if uuid_str not in result:
-                    char_class = (
+                    char_class: type[BaseCharacteristic[Any]] | None = (
                         CharacteristicRegistry.get_characteristic_class_by_uuid(
                             char_uuid
                         )
@@ -132,11 +194,11 @@ class SupportDetector:
 
     def _check_service_data(
         self,
-        address: str,
+        address: BLEAddress,
         service_info: BluetoothServiceInfoBleak,
-    ) -> list[CharacteristicInfo]:
+    ) -> list[DiscoveredCharacteristic]:
         """Check service data UUIDs against the library registries."""
-        found: list[CharacteristicInfo] = []
+        found: list[DiscoveredCharacteristic] = []
 
         for uuid_str in service_info.service_data:
             svc_info = self._translator.get_service_info_by_uuid(uuid_str)
@@ -150,11 +212,15 @@ class SupportDetector:
                         svc_info.name,
                         len(svc_chars),
                     )
-                    for char_spec in svc_chars:
+                    for char_name in svc_chars:
+                        instance = self._resolve_characteristic(
+                            name=str(char_name) if char_name else uuid_str,
+                            uuid_str=uuid_str,
+                        )
                         found.append(
-                            CharacteristicInfo(
-                                uuid=uuid_str,
-                                name=str(char_spec) if char_spec else uuid_str,
+                            DiscoveredCharacteristic(
+                                characteristic=instance,
+                                source=CharacteristicSource.ADVERTISEMENT,
                             )
                         )
                     continue
@@ -173,8 +239,15 @@ class SupportDetector:
                     uuid_str,
                     char_info.name,
                 )
+                instance = self._resolve_characteristic_by_uuid(
+                    BluetoothUUID(uuid_str),
+                    fallback_name=char_info.name or uuid_str,
+                )
                 found.append(
-                    CharacteristicInfo(uuid=uuid_str, name=char_info.name or uuid_str)
+                    DiscoveredCharacteristic(
+                        characteristic=instance,
+                        source=CharacteristicSource.ADVERTISEMENT,
+                    )
                 )
                 continue
 
@@ -186,36 +259,9 @@ class SupportDetector:
 
         return found
 
-    def _check_manufacturer_data(
-        self,
-        address: str,
-        service_info: BluetoothServiceInfoBleak,
-    ) -> list[CharacteristicInfo]:
-        """Check manufacturer data via library interpreter parsing."""
-        found: list[CharacteristicInfo] = []
-
-        try:
-            advertisement = AdvertisementManager.convert_advertisement(service_info)
-            if advertisement.interpreted_data is not None:
-                _LOGGER.debug(
-                    "Device %s has interpreted manufacturer data: %s",
-                    address,
-                    type(advertisement.interpreted_data).__name__,
-                )
-                interp_name = advertisement.interpreter_name or "Manufacturer Data"
-                found.append(CharacteristicInfo(uuid="manufacturer", name=interp_name))
-        except Exception as exc:
-            _LOGGER.debug(
-                "Device %s failed to parse manufacturer data: %s",
-                address,
-                exc,
-            )
-
-        return found
-
-    def _check_gatt_probes(self, address: str) -> list[CharacteristicInfo]:
+    def _check_gatt_probes(self, address: BLEAddress) -> list[DiscoveredCharacteristic]:
         """Check cached GATT probe results for parseable characteristics."""
-        found: list[CharacteristicInfo] = []
+        found: list[DiscoveredCharacteristic] = []
         gatt = self._gatt_manager
 
         if address not in gatt.probe_results:
@@ -231,10 +277,59 @@ class SupportDetector:
             probe_result.parseable_count,
         )
         for char_uuid in probe_result.supported_char_uuids:
-            char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-                char_uuid
+            instance = self._resolve_characteristic_by_uuid(
+                char_uuid, fallback_name=char_uuid.short_form
             )
-            name = char_class().name if char_class else char_uuid.short_form
-            found.append(CharacteristicInfo(uuid=str(char_uuid), name=name))
+            found.append(
+                DiscoveredCharacteristic(
+                    characteristic=instance,
+                    source=CharacteristicSource.GATT,
+                )
+            )
 
         return found
+
+    # ------------------------------------------------------------------
+    # Characteristic resolution helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_characteristic(
+        self,
+        name: str,
+        uuid_str: str,
+    ) -> BaseCharacteristic[Any]:
+        """Resolve a characteristic name to a ``BaseCharacteristic`` instance.
+
+        Attempts to look up the characteristic by name via the translator,
+        falling back to an ``UnknownCharacteristic`` with the given *uuid_str*.
+        """
+        char_enum: CharacteristicName | None = None
+        with contextlib.suppress(ValueError):
+            char_enum = CharacteristicName(name)
+
+        if char_enum is not None:
+            char_uuid = self._translator.get_characteristic_uuid_by_name(char_enum)
+            if char_uuid is not None:
+                char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
+                    char_uuid
+                )
+                if char_class is not None:
+                    return char_class()
+        return UnknownCharacteristic(
+            info=CharacteristicInfo(
+                uuid=BluetoothUUID(uuid_str), name="Unknown_" + name
+            )
+        )
+
+    @staticmethod
+    def _resolve_characteristic_by_uuid(
+        char_uuid: BluetoothUUID,
+        fallback_name: str,
+    ) -> BaseCharacteristic[Any]:
+        """Resolve a UUID to a ``BaseCharacteristic`` instance."""
+        char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(char_uuid)
+        if char_class is not None:
+            return char_class()
+        return UnknownCharacteristic(
+            info=CharacteristicInfo(uuid=char_uuid, name="Unknown_" + fallback_name)
+        )

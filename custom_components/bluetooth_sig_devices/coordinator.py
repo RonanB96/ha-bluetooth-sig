@@ -29,6 +29,7 @@ from typing import Any
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.gatt.services.base import BaseGattService
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
 from bluetooth_sig.registry.company_identifiers import (
     company_identifiers_registry,
@@ -64,9 +65,10 @@ from .const import (
     DOMAIN,
     EXCLUDED_SERVICE_NAMES,
     MAX_CONCURRENT_PROBES,
-    CharacteristicInfo,
+    BLEAddress,
     DeviceStatistics,
     DiagnosticsSnapshot,
+    DiscoveredCharacteristic,
     DiscoveryData,
     GATTProbeSnapshotData,
 )
@@ -106,10 +108,10 @@ class BluetoothSIGCoordinator:
         self.entry = entry
         self.poll_interval = poll_interval
         self.translator = BluetoothSIGTranslator()
-        self.devices: dict[str, Device] = {}
+        self.devices: dict[BLEAddress, Device] = {}
 
         # Per-device characteristic tracking: {address: {uuid_str: name}}
-        self.known_characteristics: dict[str, dict[str, str]] = {}
+        self.known_characteristics: dict[BLEAddress, dict[str, str]] = {}
 
         # Retrieve excluded UUIDs built during prewarm_registries().
         if BluetoothSIGCoordinator._cached_excluded_uuids is not None:
@@ -124,7 +126,7 @@ class BluetoothSIGCoordinator:
 
         # Per-device processor coordinators keyed by address
         self._processor_coordinators: dict[
-            str,
+            BLEAddress,
             ActiveBluetoothProcessorCoordinator[
                 PassiveBluetoothDataUpdate[float | int | str | bool]
             ],
@@ -148,7 +150,7 @@ class BluetoothSIGCoordinator:
     def processor_coordinators(
         self,
     ) -> dict[
-        str,
+        BLEAddress,
         ActiveBluetoothProcessorCoordinator[
             PassiveBluetoothDataUpdate[float | int | str | bool]
         ],
@@ -192,7 +194,7 @@ class BluetoothSIGCoordinator:
         excluded_char_uuids: set[str] = set()
 
         for svc_class in GattServiceRegistry.get_all_services():
-            svc = svc_class()
+            svc: BaseGattService = svc_class()
             if svc.name in EXCLUDED_SERVICE_NAMES:
                 excluded_service_uuids.add(svc.uuid.short_form.upper())
                 for char_uuid in svc.get_expected_characteristic_uuids():
@@ -230,7 +232,7 @@ class BluetoothSIGCoordinator:
     # Discovery helpers
     # ------------------------------------------------------------------
 
-    def _has_config_entry(self, address: str) -> bool:
+    def _has_config_entry(self, address: BLEAddress) -> bool:
         """Check whether a confirmed config entry exists for *address*.
 
         This is the canonical implementation — ``has_config_entry`` delegates
@@ -243,7 +245,7 @@ class BluetoothSIGCoordinator:
             if entry.unique_id is not None
         )
 
-    def has_config_entry(self, address: str) -> bool:
+    def has_config_entry(self, address: BLEAddress) -> bool:
         """Public alias — delegates to ``_has_config_entry``."""
         return self._has_config_entry(address)
 
@@ -253,7 +255,7 @@ class BluetoothSIGCoordinator:
 
     def create_device_processor(
         self,
-        address: str,
+        address: BLEAddress,
         entry: ConfigEntry,
         async_add_entities: AddEntitiesCallback,
         entity_class: type,
@@ -314,7 +316,7 @@ class BluetoothSIGCoordinator:
     # ------------------------------------------------------------------
 
     def _needs_poll(
-        self, address: str
+        self, address: BLEAddress
     ) -> Callable[[BluetoothServiceInfoBleak, float | None], bool]:
         """Return a ``needs_poll_method`` closure for *address*.
 
@@ -340,7 +342,7 @@ class BluetoothSIGCoordinator:
         return _check
 
     def _poll_gatt(
-        self, address: str
+        self, address: BLEAddress
     ) -> Callable[
         [BluetoothServiceInfoBleak],
         Coroutine[Any, Any, PassiveBluetoothDataUpdate[float | int | str | bool]],
@@ -366,7 +368,7 @@ class BluetoothSIGCoordinator:
         return _poll
 
     @callback
-    def notify_probe_complete(self, address: str) -> None:
+    def notify_probe_complete(self, address: BLEAddress) -> None:
         """Trigger an immediate poll after a successful GATT probe.
 
         For devices whose advertisement data never changes, HA's bluetooth
@@ -393,7 +395,7 @@ class BluetoothSIGCoordinator:
         )
         proc._debounced_poll.async_schedule_call()  # noqa: SLF001
 
-    def remove_device(self, address: str) -> None:
+    def remove_device(self, address: BLEAddress) -> None:
         """Remove tracking state for a device whose config entry was removed."""
         self._processor_coordinators.pop(address, None)
         self._gatt_manager.remove_device(address)
@@ -454,7 +456,7 @@ class BluetoothSIGCoordinator:
 
     def _build_passive_bluetooth_update(
         self,
-        address: str,
+        address: BLEAddress,
         service_info: BluetoothServiceInfoBleak,
         advertisement: AdvertisementData,
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool]:
@@ -553,7 +555,7 @@ class BluetoothSIGCoordinator:
             len(already_discovered_nonconnectable),
         )
 
-        seen_addresses: dict[str, BluetoothServiceInfoBleak] = {}
+        seen_addresses: dict[BLEAddress, BluetoothServiceInfoBleak] = {}
         for service_info in (
             already_discovered_connectable + already_discovered_nonconnectable
         ):
@@ -659,9 +661,25 @@ class BluetoothSIGCoordinator:
 
         # Collect characteristic names for the discovery card
         supported = self._support_detector.get_supported_characteristics(service_info)
-        char_names = self._support_detector.build_characteristics_summary(
-            address, supported, self.known_characteristics
+        manufacturer_interp = (
+            self._support_detector.check_manufacturer_support(service_info) or ""
         )
+        char_names = self._support_detector.build_characteristics_summary(
+            address,
+            supported,
+            self.known_characteristics,
+            manufacturer_name=manufacturer_interp,
+        )
+
+        # Extract manufacturer name from advertisement data
+        manufacturer = ""
+        try:
+            advertisement = AdvertisementManager.convert_advertisement(service_info)
+            manufacturer = (
+                AdvertisementManager.get_manufacturer_name(advertisement) or ""
+            )
+        except Exception:
+            _LOGGER.debug("Could not extract manufacturer for %s", address)
 
         _LOGGER.info(
             "Firing discovery flow for device %s (%s) — characteristics: %s",
@@ -677,6 +695,7 @@ class BluetoothSIGCoordinator:
                 address=address,
                 name=service_info.name or f"Bluetooth Device {address[-8:]}",
                 characteristics=char_names,
+                manufacturer=manufacturer,
             ),
         )
 
@@ -706,11 +725,11 @@ class BluetoothSIGCoordinator:
     # Diagnostics API
     # ------------------------------------------------------------------
 
-    def is_device_active(self, address: str) -> bool:
+    def is_device_active(self, address: BLEAddress) -> bool:
         """Return True if a device is actively tracked by a processor."""
         return address in self._processor_coordinators
 
-    def get_known_characteristics(self, address: str) -> dict[str, str]:
+    def get_known_characteristics(self, address: BLEAddress) -> dict[str, str]:
         """Return ``{uuid_str: human_name}`` for all known characteristics."""
         return self._support_detector.get_known_characteristics(
             address, self.known_characteristics
@@ -718,12 +737,16 @@ class BluetoothSIGCoordinator:
 
     def _build_characteristics_summary(
         self,
-        address: str,
-        supported: list[CharacteristicInfo],
+        address: BLEAddress,
+        supported: list[DiscoveredCharacteristic],
+        manufacturer_name: str = "",
     ) -> str:
         """Build a formatted characteristics string and update tracking."""
         return self._support_detector.build_characteristics_summary(
-            address, supported, self.known_characteristics
+            address,
+            supported,
+            self.known_characteristics,
+            manufacturer_name=manufacturer_name,
         )
 
     def get_diagnostics_snapshot(self) -> DiagnosticsSnapshot:

@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.types.gatt_enums import CharacteristicRole
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -33,6 +35,9 @@ from .const import (
     DEFAULT_CONNECTION_TIMEOUT,
     DOMAIN,
     MAX_PROBE_FAILURES,
+    BLEAddress,
+    CharacteristicSource,
+    DiscoveredCharacteristic,
     DiscoveryData,
 )
 from .device_adapter import HomeAssistantBluetoothAdapter
@@ -44,6 +49,7 @@ from .entity_builder import (
     add_struct_entities,
     to_ha_state,
 )
+from .support_detector import SupportDetector
 
 if TYPE_CHECKING:
     from .coordinator import BluetoothSIGCoordinator
@@ -86,18 +92,18 @@ class GATTManager:
         self._coordinator = coordinator
 
         # GATT probe results cache
-        self.probe_results: dict[str, GATTProbeResult] = {}
+        self.probe_results: dict[BLEAddress, GATTProbeResult] = {}
         # Addresses that failed probing (to avoid repeated attempts)
-        self.probe_failures: dict[str, int] = {}
+        self.probe_failures: dict[BLEAddress, int] = {}
         # Addresses currently being probed (to avoid duplicate probe attempts)
-        self.pending_probes: set[str] = set()
+        self.pending_probes: set[BLEAddress] = set()
         # Semaphore to limit concurrent GATT probes
         self._probe_semaphore = asyncio.Semaphore(max_concurrent_probes)
         # In-flight GATT probe tasks keyed by device address
-        self._probe_tasks: dict[str, asyncio.Task[None]] = {}
+        self._probe_tasks: dict[BLEAddress, asyncio.Task[None]] = {}
         # Initial GATT read cached during probe — consumed on first poll
         self._initial_gatt_cache: dict[
-            str, PassiveBluetoothDataUpdate[float | int | str | bool]
+            BLEAddress, PassiveBluetoothDataUpdate[float | int | str | bool]
         ] = {}
 
     # ------------------------------------------------------------------
@@ -105,7 +111,7 @@ class GATTManager:
     # ------------------------------------------------------------------
 
     @property
-    def probe_tasks(self) -> dict[str, asyncio.Task[None]]:
+    def probe_tasks(self) -> dict[BLEAddress, asyncio.Task[None]]:
         """Return the in-flight probe tasks."""
         return self._probe_tasks
 
@@ -196,7 +202,7 @@ class GATTManager:
                         )
                         continue
 
-                    char_class = (
+                    char_class: type[BaseCharacteristic[Any]] | None = (
                         CharacteristicRegistry.get_characteristic_class_by_uuid(
                             char_uuid
                         )
@@ -252,7 +258,7 @@ class GATTManager:
 
         except Exception as err:
             self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Failed to probe device %s (attempt %d/%d): %s",
                 address,
                 self.probe_failures[address],
@@ -307,31 +313,27 @@ class GATTManager:
                     if not coord.has_config_entry(address):
                         coord.discovery_tracker.mark_discovery_triggered(address)
 
-                        # Build characteristic summary from probe results
-                        char_names: list[str] = []
+                        # Build DiscoveredCharacteristic list from probe
+                        supported: list[DiscoveredCharacteristic] = []
                         for char_uuid in result.supported_char_uuids:
-                            char_class = (
-                                CharacteristicRegistry.get_characteristic_class_by_uuid(
-                                    char_uuid
+                            instance = SupportDetector._resolve_characteristic_by_uuid(
+                                char_uuid,
+                                fallback_name=char_uuid.short_form,
+                            )
+                            supported.append(
+                                DiscoveredCharacteristic(
+                                    characteristic=instance,
+                                    source=CharacteristicSource.GATT,
                                 )
                             )
-                            name = (
-                                char_class().name
-                                if char_class
-                                else char_uuid.short_form
+
+                        characteristics_str = (
+                            coord.support_detector.build_characteristics_summary(
+                                address,
+                                supported,
+                                coord.known_characteristics,
                             )
-                            char_names.append(name)
-
-                        # Update coordinator's known_characteristics
-                        device_chars = coord.known_characteristics.setdefault(
-                            address, {}
                         )
-                        for char_uuid, name in zip(
-                            result.supported_char_uuids, char_names, strict=False
-                        ):
-                            device_chars[str(char_uuid)] = name
-
-                        characteristics_str = ", ".join(dict.fromkeys(char_names))
 
                         discovery_flow.async_create_flow(
                             self._hass,
@@ -342,6 +344,7 @@ class GATTManager:
                                 name=service_info.name
                                 or f"Bluetooth Device {address[-8:]}",
                                 characteristics=characteristics_str,
+                                manufacturer="",
                             ),
                         )
                 else:
@@ -351,7 +354,7 @@ class GATTManager:
                     )
             except TimeoutError:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
                     address,
                     probe_timeout,
@@ -360,7 +363,7 @@ class GATTManager:
                 )
             except Exception as err:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.debug(
+                _LOGGER.warning(
                     "GATT probe failed for %s: %s (attempt %d/%d)",
                     address,
                     err,
@@ -389,7 +392,7 @@ class GATTManager:
 
     async def _read_chars_connected(
         self,
-        address: str,
+        address: BLEAddress,
         device: object,
         probe_result: GATTProbeResult,
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
@@ -409,17 +412,17 @@ class GATTManager:
                 if parsed_value is None:
                     continue
 
-                char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-                    char_uuid
+                char_class: type[BaseCharacteristic[Any]] | None = (
+                    CharacteristicRegistry.get_characteristic_class_by_uuid(char_uuid)
                 )
                 if not char_class:
                     continue
 
-                char_instance = char_class()
-                char_name = char_instance.name
-                char_unit = char_instance.unit
+                char_instance: BaseCharacteristic[Any] = char_class()
+                char_name: str = char_instance.name
+                char_unit: str = char_instance.unit
 
-                role = char_instance.role
+                role: CharacteristicRole = char_instance.role
                 if role in SKIP_ROLES:
                     _LOGGER.debug(
                         "Skipping GATT %s (role=%s) from %s",
@@ -458,8 +461,8 @@ class GATTManager:
                     )
 
             except Exception as err:
-                _LOGGER.debug(
-                    "Failed to read characteristic %s from %s: %s",
+                _LOGGER.warning(
+                    "Failed to read characteristic %s from %s during probe: %s",
                     char_uuid.short_form,
                     address,
                     err,
@@ -477,7 +480,7 @@ class GATTManager:
 
     async def async_poll_gatt_characteristics(
         self,
-        address: str,
+        address: BLEAddress,
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
         """Poll GATT characteristics from a connectable device.
 
@@ -492,7 +495,7 @@ class GATTManager:
         coord = self._coordinator
         device = coord.devices.get(address)
         if not device:
-            _LOGGER.debug("No device instance for %s", address)
+            _LOGGER.warning("No device instance for %s — cannot poll", address)
             return None
 
         try:
@@ -508,7 +511,7 @@ class GATTManager:
                     if parsed_value is None:
                         continue
 
-                    char_class = (
+                    char_class: type[BaseCharacteristic[Any]] | None = (
                         CharacteristicRegistry.get_characteristic_class_by_uuid(
                             char_uuid
                         )
@@ -516,11 +519,11 @@ class GATTManager:
                     if not char_class:
                         continue
 
-                    char_instance = char_class()
-                    char_name = char_instance.name
-                    char_unit = char_instance.unit
+                    char_instance: BaseCharacteristic[Any] = char_class()
+                    char_name: str = char_instance.name
+                    char_unit: str = char_instance.unit
 
-                    role = char_instance.role
+                    role: CharacteristicRole = char_instance.role
                     if role in SKIP_ROLES:
                         _LOGGER.debug(
                             "Skipping GATT %s (role=%s) from %s",
@@ -559,7 +562,7 @@ class GATTManager:
                         )
 
                 except Exception as err:
-                    _LOGGER.debug(
+                    _LOGGER.warning(
                         "Failed to read characteristic %s from %s: %s",
                         char_uuid.short_form,
                         address,
@@ -577,7 +580,7 @@ class GATTManager:
             )
 
         except Exception as err:
-            _LOGGER.debug("Failed to poll GATT from %s: %s", address, err)
+            _LOGGER.warning("Failed to poll GATT from %s: %s", address, err)
             return None
 
         finally:
@@ -586,7 +589,7 @@ class GATTManager:
 
     async def async_poll_gatt_with_semaphore(
         self,
-        address: str,
+        address: BLEAddress,
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
         """Poll GATT characteristics with concurrency control.
 
@@ -628,7 +631,7 @@ class GATTManager:
         )
         self._probe_tasks[address] = task
 
-    def can_probe(self, address: str, connectable: bool) -> bool:
+    def can_probe(self, address: BLEAddress, connectable: bool) -> bool:
         """Return True if a GATT probe is possible for this address."""
         return (
             connectable
@@ -637,7 +640,7 @@ class GATTManager:
             and self.probe_failures.get(address, 0) < MAX_PROBE_FAILURES
         )
 
-    def is_probes_exhausted(self, address: str) -> bool:
+    def is_probes_exhausted(self, address: BLEAddress) -> bool:
         """Return True if all probe attempts have been used."""
         return (
             self.probe_failures.get(address, 0) >= MAX_PROBE_FAILURES
@@ -648,7 +651,7 @@ class GATTManager:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def remove_device(self, address: str) -> None:
+    def remove_device(self, address: BLEAddress) -> None:
         """Clean up GATT state for a removed device."""
         self.probe_results.pop(address, None)
         self.probe_failures.pop(address, None)

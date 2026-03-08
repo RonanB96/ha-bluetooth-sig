@@ -36,6 +36,8 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
+from .const import BLEAddress
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -55,7 +57,7 @@ class AdvertisementManager:
 
     def __init__(
         self,
-        address: str,
+        address: BLEAddress,
         *,
         hass: HomeAssistant | None = None,
     ) -> None:

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.types.uuid import BluetoothUUID
 
-from .const import STATIC_ADDRESS_TYPES, BLEAddressType
+from .const import STATIC_ADDRESS_TYPES, BLEAddress, BLEAddressType
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -25,7 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _classify_random_address(address: str) -> BLEAddressType:
+def _classify_random_address(address: BLEAddress) -> BLEAddressType:
     """Classify a random BLE address sub-type from the first octet.
 
     Per the Bluetooth Core Spec (Vol 6, Part B, §1.3) the two
@@ -127,7 +127,7 @@ class GATTProbeResult:
     what characteristics a device supports.
     """
 
-    address: str
+    address: BLEAddress
     name: str | None = None
     parseable_count: int = 0
     supported_char_uuids: list[BluetoothUUID] = field(default_factory=list)
