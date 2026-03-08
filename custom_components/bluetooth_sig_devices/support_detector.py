@@ -151,15 +151,10 @@ class SupportDetector:
                         len(svc_chars),
                     )
                     for char_spec in svc_chars:
-                        char_uuid = getattr(char_spec, "uuid", None)
-                        if char_uuid is not None:
-                            char_uuid_str = str(char_uuid)
-                        else:
-                            char_uuid_str = getattr(char_spec, "uuid_str", uuid_str)
                         found.append(
                             CharacteristicInfo(
-                                uuid=char_uuid_str,
-                                name=getattr(char_spec, "name", None) or char_uuid_str,
+                                uuid=uuid_str,
+                                name=str(char_spec) if char_spec else uuid_str,
                             )
                         )
                     continue

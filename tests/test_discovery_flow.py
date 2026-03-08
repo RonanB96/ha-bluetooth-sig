@@ -89,7 +89,7 @@ class TestIntegrationDiscoveryFlow:
         placeholders = result["description_placeholders"]
         assert "Unknown" in placeholders["characteristics"]
 
-    async def test_discovery_confirm_creates_device_entry(
+    async def test_discovery_confirm_createsmake_device_entry(
         self,
         hass: HomeAssistant,
         mock_bluetooth_disabled: Generator[None],
