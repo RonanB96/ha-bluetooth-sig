@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 from bluetooth_sig.advertising import SIGCharacteristicData
-from bluetooth_sig.types.advertising import AdvertisementData
+from bluetooth_sig.types.advertising import AdvertisementData, BLEAdvertisingFlags
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 from custom_components.bluetooth_sig_devices.device_adapter import (
@@ -189,9 +191,7 @@ class TestConvertAdvertisement:
         # Apple manufacturer data is proprietary - should not parse to SIGCharacteristicData
         # interpreted_data may be None or some other type
         if result.interpreted_data is not None:
-            # If parsed, it shouldn't be a SIGCharacteristicData
-            # (unless the library adds Apple parsing later)
-            pass
+            assert not isinstance(result.interpreted_data, SIGCharacteristicData)
 
         # Verify manufacturer data is preserved
         assert result.ad_structures.core.manufacturer_data is not None
@@ -211,6 +211,439 @@ class TestConvertAdvertisement:
         """Test that invalid input type raises TypeError."""
         with pytest.raises(TypeError, match="Expected BluetoothServiceInfoBleak"):
             HomeAssistantBluetoothAdapter.convert_advertisement("not_a_service_info")
+
+    def test_convert_sets_flags_connectable(
+        self, mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak
+    ) -> None:
+        """Test that connectable devices get BR_EDR_NOT_SUPPORTED | LE_GENERAL_DISCOVERABLE_MODE."""
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(
+            mock_bluetooth_service_info_battery
+        )
+
+        flags = result.ad_structures.properties.flags
+        assert flags & BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
+        assert flags & BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE
+
+    def test_convert_sets_flags_non_connectable(self) -> None:
+        """Test that non-connectable devices only get BR_EDR_NOT_SUPPORTED."""
+        service_info = BluetoothServiceInfoBleak(
+            name="Non-Connectable Device",
+            address="AA:BB:CC:DD:EE:10",
+            rssi=-80,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=False,
+            time=0,
+            tx_power=None,
+        )
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        flags = result.ad_structures.properties.flags
+        assert flags & BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
+        assert not (flags & BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE)
+
+    def test_convert_maps_tx_power(self) -> None:
+        """Test that tx_power from service info is mapped to DeviceProperties."""
+        service_info = BluetoothServiceInfoBleak(
+            name="TX Power Device",
+            address="AA:BB:CC:DD:EE:11",
+            rssi=-65,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=8,
+        )
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        assert result.ad_structures.properties.tx_power == 8
+
+    def test_convert_tx_power_none_defaults_to_zero(
+        self, mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak
+    ) -> None:
+        """Test that tx_power=None defaults to 0."""
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(
+            mock_bluetooth_service_info_battery
+        )
+
+        assert result.ad_structures.properties.tx_power == 0
+
+    def test_convert_sets_device_address(
+        self, mock_bluetooth_service_info_battery: BluetoothServiceInfoBleak
+    ) -> None:
+        """Test that le_bluetooth_device_address is set from service info."""
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(
+            mock_bluetooth_service_info_battery
+        )
+
+        assert (
+            result.ad_structures.directed.le_bluetooth_device_address
+            == "AA:BB:CC:DD:EE:01"
+        )
+
+    def test_convert_resolves_company_name(self) -> None:
+        """Test that manufacturer data uses resolved company names from SIG registry."""
+        service_info = BluetoothServiceInfoBleak(
+            name="Apple Device",
+            address="AA:BB:CC:DD:EE:12",
+            rssi=-70,
+            manufacturer_data={0x004C: bytes([0x01, 0x02, 0x03])},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=MagicMock(),
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        mfr_data = result.ad_structures.core.manufacturer_data
+        assert 0x004C in mfr_data
+        # Company name should be resolved, not "Unknown"
+        assert mfr_data[0x004C].company.name != "Unknown"
+
+    def test_convert_raw_pdu_extracts_real_flags(self) -> None:
+        """Test Tier 1: raw PDU bytes produce real BLE flags."""
+        mock_device = MagicMock()
+        mock_device.details = {}
+        service_info = BluetoothServiceInfoBleak(
+            name="Raw Device",
+            address="AA:BB:CC:DD:EE:20",
+            rssi=-60,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+        # Inject raw AD bytes: flags(02 01 06) + battery service data
+        object.__setattr__(
+            service_info,
+            "raw",
+            bytes(
+                [
+                    0x02,
+                    0x01,
+                    0x06,  # Flags: LE_GENERAL_DISCOVERABLE | BR_EDR_NOT_SUPPORTED
+                    0x04,
+                    0x16,
+                    0x19,
+                    0x2A,
+                    0x50,  # Service Data: Battery 80%
+                ]
+            ),
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # Real flags from raw parse (value 6 = 0x06)
+        assert result.ad_structures.properties.flags == BLEAdvertisingFlags(0x06)
+        # Address supplemented from service_info
+        assert (
+            result.ad_structures.directed.le_bluetooth_device_address
+            == "AA:BB:CC:DD:EE:20"
+        )
+
+    def test_convert_raw_pdu_extracts_appearance(self) -> None:
+        """Test Tier 1: raw PDU bytes with appearance data."""
+        mock_device = MagicMock()
+        mock_device.details = {}
+        service_info = BluetoothServiceInfoBleak(
+            name="Appearance Device",
+            address="AA:BB:CC:DD:EE:21",
+            rssi=-55,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=False,
+            time=0,
+            tx_power=None,
+        )
+        # Raw: flags + appearance 0x03C1 (HID Keyboard)
+        object.__setattr__(
+            service_info,
+            "raw",
+            bytes(
+                [
+                    0x02,
+                    0x01,
+                    0x06,
+                    0x03,
+                    0x19,
+                    0xC1,
+                    0x03,  # Appearance: 0x03C1
+                ]
+            ),
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        assert result.ad_structures.properties.appearance is not None
+        assert result.ad_structures.properties.appearance.raw_value == 0x03C1
+
+    def test_convert_raw_pdu_extracts_tx_power(self) -> None:
+        """Test Tier 1: raw PDU bytes with TX power."""
+        mock_device = MagicMock()
+        mock_device.details = {}
+        service_info = BluetoothServiceInfoBleak(
+            name="TX Device",
+            address="AA:BB:CC:DD:EE:22",
+            rssi=-65,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+        # Raw: flags + tx power 4 dBm
+        object.__setattr__(
+            service_info,
+            "raw",
+            bytes(
+                [
+                    0x02,
+                    0x01,
+                    0x06,
+                    0x02,
+                    0x0A,
+                    0x04,  # TX Power: 4 dBm
+                ]
+            ),
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        assert result.ad_structures.properties.tx_power == 4
+
+    def test_convert_falls_back_when_no_raw(self) -> None:
+        """Test Tier 2: manual fallback when raw is None."""
+        mock_device = MagicMock()
+        mock_device.details = {}
+        service_info = BluetoothServiceInfoBleak(
+            name="No Raw Device",
+            address="AA:BB:CC:DD:EE:23",
+            rssi=-70,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=5,
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # Manual fallback: synthetic flags
+        flags = result.ad_structures.properties.flags
+        assert flags & BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
+        assert flags & BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE
+        assert result.ad_structures.properties.tx_power == 5
+        assert result.ad_structures.core.local_name == "No Raw Device"
+
+    def test_convert_enriches_from_bluez_appearance(self) -> None:
+        """Test Tier 3: BlueZ Device1 props enrich appearance."""
+        mock_device = MagicMock()
+        mock_device.details = {
+            "path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_24",
+            "props": {
+                "Appearance": 0x03C1,  # HID Keyboard
+            },
+        }
+        service_info = BluetoothServiceInfoBleak(
+            name="BlueZ Device",
+            address="AA:BB:CC:DD:EE:24",
+            rssi=-60,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # Appearance resolved from BlueZ props
+        assert result.ad_structures.properties.appearance is not None
+        assert result.ad_structures.properties.appearance.raw_value == 0x03C1
+        assert "Human Interface Device" in (
+            result.ad_structures.properties.appearance.full_name or ""
+        )
+
+    def test_convert_enriches_from_bluez_class_of_device(self) -> None:
+        """Test Tier 3: BlueZ Device1 props enrich class_of_device."""
+        mock_device = MagicMock()
+        mock_device.details = {
+            "path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_25",
+            "props": {
+                "Class": 0x240404,  # Audio/Video headset
+            },
+        }
+        service_info = BluetoothServiceInfoBleak(
+            name="Headset",
+            address="AA:BB:CC:DD:EE:25",
+            rssi=-55,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # Class of Device resolved from BlueZ props
+        cod = result.ad_structures.properties.class_of_device
+        assert cod is not None
+        assert cod.raw_value == 0x240404
+
+    def test_convert_enriches_from_bluez_real_flags(self) -> None:
+        """Test Tier 3: BlueZ AdvertisingFlags override synthetic flags."""
+        mock_device = MagicMock()
+        mock_device.details = {
+            "path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_26",
+            "props": {
+                "AdvertisingFlags": bytes([0x05]),  # LIMITED | BR_EDR_NOT_SUPPORTED
+            },
+        }
+        service_info = BluetoothServiceInfoBleak(
+            name="BlueZ Flags Device",
+            address="AA:BB:CC:DD:EE:26",
+            rssi=-50,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        flags = result.ad_structures.properties.flags
+        # Real flags from BlueZ + connectable mapping adds LE_GENERAL
+        assert flags & BLEAdvertisingFlags.LE_LIMITED_DISCOVERABLE_MODE
+        assert flags & BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
+        assert flags & BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE
+
+    def test_convert_esphome_no_enrichment(self) -> None:
+        """Test ESPHome path: only address_type in details, no enrichment."""
+        mock_device = MagicMock()
+        mock_device.details = {"address_type": 0}  # ESPHome public address
+        service_info = BluetoothServiceInfoBleak(
+            name="ESPHome Device",
+            address="AA:BB:CC:DD:EE:27",
+            rssi=-65,
+            manufacturer_data={},
+            service_data={
+                "00002a19-0000-1000-8000-00805f9b34fb": bytes([0x50]),
+            },
+            service_uuids=["00002a19-0000-1000-8000-00805f9b34fb"],
+            source="esphome_proxy",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # No enrichment: appearance and class_of_device remain None
+        assert result.ad_structures.properties.appearance is None
+        assert result.ad_structures.properties.class_of_device is None
+        # Still produces valid result
+        assert result.rssi == -65
+
+    def test_convert_raw_pdu_not_overwritten_by_bluez_appearance(self) -> None:
+        """Test that raw-parsed appearance is NOT overwritten by BlueZ props."""
+        mock_device = MagicMock()
+        mock_device.details = {
+            "path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_28",
+            "props": {
+                "Appearance": 0x0040,  # Generic Thermometer
+            },
+        }
+        service_info = BluetoothServiceInfoBleak(
+            name="Raw+BlueZ Device",
+            address="AA:BB:CC:DD:EE:28",
+            rssi=-60,
+            manufacturer_data={},
+            service_data={},
+            service_uuids=[],
+            source="local",
+            device=mock_device,
+            advertisement=MagicMock(),
+            connectable=True,
+            time=0,
+            tx_power=None,
+        )
+        # Raw has appearance 0x03C1 (HID Keyboard)
+        object.__setattr__(
+            service_info,
+            "raw",
+            bytes(
+                [
+                    0x02,
+                    0x01,
+                    0x06,
+                    0x03,
+                    0x19,
+                    0xC1,
+                    0x03,
+                ]
+            ),
+        )
+
+        result = HomeAssistantBluetoothAdapter.convert_advertisement(service_info)
+
+        # Raw-parsed appearance (0x03C1) is kept, NOT overwritten by BlueZ (0x0040)
+        assert result.ad_structures.properties.appearance is not None
+        assert result.ad_structures.properties.appearance.raw_value == 0x03C1
 
 
 class TestHomeAssistantBluetoothAdapter:
@@ -260,10 +693,8 @@ class TestHomeAssistantBluetoothAdapter:
 
         assert len(received_advertisements) == 1  # Still 1, not 2
 
-    def test_connection_methods_require_hass(self) -> None:
+    async def test_connection_methods_require_hass(self) -> None:
         """Test that connection methods require hass parameter."""
-        import asyncio
-
         from bluetooth_sig.types.uuid import BluetoothUUID
 
         adapter = HomeAssistantBluetoothAdapter(
@@ -275,17 +706,15 @@ class TestHomeAssistantBluetoothAdapter:
         with pytest.raises(
             RuntimeError, match="GATT operations require hass parameter"
         ):
-            asyncio.get_event_loop().run_until_complete(adapter.connect())
+            await adapter.connect()
 
         # get_services requires connection, should raise RuntimeError
         with pytest.raises(RuntimeError, match="Not connected to device"):
-            asyncio.get_event_loop().run_until_complete(adapter.get_services())
+            await adapter.get_services()
 
         # read_gatt_char requires connection, should raise RuntimeError
         with pytest.raises(RuntimeError, match="Not connected to device"):
-            asyncio.get_event_loop().run_until_complete(
-                adapter.read_gatt_char(BluetoothUUID("2A19"))
-            )
+            await adapter.read_gatt_char(BluetoothUUID("2A19"))
 
     def test_adapter_has_connection_support_property(self) -> None:
         """Test has_connection_support property."""

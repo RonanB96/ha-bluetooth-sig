@@ -14,10 +14,15 @@ protocol-mandated advertisement methods here) and used directly by
 
 from __future__ import annotations
 
+import enum
 import logging
 from collections.abc import Callable
+from typing import Any
 
 from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
+from bluetooth_sig.advertising.pdu_parser import AdvertisingPDUParser
+from bluetooth_sig.registry.core.appearance_values import appearance_values_registry
+from bluetooth_sig.registry.core.class_of_device import class_of_device_registry
 from bluetooth_sig.types.advertising import (
     AdvertisementData,
     AdvertisingDataStructures,
@@ -30,7 +35,8 @@ from bluetooth_sig.types.advertising import (
     OOBSecurityData,
     SecurityData,
 )
-from bluetooth_sig.types.company import CompanyIdentifier, ManufacturerData
+from bluetooth_sig.types.appearance import AppearanceData
+from bluetooth_sig.types.company import ManufacturerData
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -38,7 +44,16 @@ from homeassistant.core import HomeAssistant
 
 from .const import BLEAddress
 
+_PDU_PARSER = AdvertisingPDUParser()
+
 _LOGGER = logging.getLogger(__name__)
+
+
+class ConversionTier(enum.Enum):
+    """Which conversion strategy produced the ad_structures."""
+
+    RAW_PDU = "raw_pdu"
+    MANUAL = "manual"
 
 
 class AdvertisementManager:
@@ -76,18 +91,38 @@ class AdvertisementManager:
         self._disconnected_callback: Callable[[], None] | None = None
         self._advertisement_callbacks: list[Callable[[AdvertisementData], None]] = []
 
+    @property
+    def connectable(self) -> bool:
+        """Return whether the device last advertised as connectable.
+
+        Derived from the ``LE_GENERAL_DISCOVERABLE_MODE`` flag in the
+        latest advertisement — no separate state to keep in sync.
+        """
+        if self._latest_advertisement is None:
+            return False
+        flags = self._latest_advertisement.ad_structures.properties.flags
+        return bool(flags & BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE)
+
     # ------------------------------------------------------------------
     # Conversion — classmethod API (no instance required)
     # ------------------------------------------------------------------
 
     @classmethod
-    def convert_advertisement(cls, advertisement: object) -> AdvertisementData:
+    def convert_advertisement(
+        cls, advertisement: BluetoothServiceInfoBleak
+    ) -> AdvertisementData:
         """Convert HA ``BluetoothServiceInfoBleak`` to library ``AdvertisementData``.
 
-        Performs structural HA→library mapping **and** interpreter parsing in
-        two internal steps.  This is the single public entry point; callers
-        that previously used ``HomeAssistantBluetoothAdapter.convert_advertisement``
-        are redirected here.
+        Uses a three-tier strategy for the richest possible data:
+
+        1. **Raw PDU** — if ``service_info.raw`` contains bytes (BlueZ side
+           channel or ESPHome raw path), parse them with
+           ``AdvertisingPDUParser`` for real flags, appearance, tx_power, etc.
+        2. **Manual fallback** — build ``AdvertisingDataStructures`` from the
+           pre-parsed ``BluetoothServiceInfoBleak`` fields.
+        3. **Platform enrichment** — if BlueZ ``device.details["props"]``
+           contains ``Appearance``, ``Class``, or ``AdvertisingFlags``, merge
+           them into the result.
 
         Args:
             advertisement: Home Assistant's Bluetooth service info.
@@ -95,17 +130,28 @@ class AdvertisementManager:
         Returns:
             ``AdvertisementData`` compatible with bluetooth-sig-python.
 
-        Raises:
-            TypeError: If *advertisement* is not a ``BluetoothServiceInfoBleak``.
-
         """
-        if not isinstance(advertisement, BluetoothServiceInfoBleak):
-            msg = f"Expected BluetoothServiceInfoBleak, got {type(advertisement)}"
-            raise TypeError(msg)
+        service_info = advertisement
 
-        service_info: BluetoothServiceInfoBleak = advertisement
+        # Tier 1: raw PDU parsing (richest data)
+        ad_structures = cls._try_parse_raw(service_info)
+        tier: ConversionTier | None = (
+            ConversionTier.RAW_PDU if ad_structures is not None else None
+        )
 
-        ad_structures = cls._build_ad_structures(service_info)
+        # Tier 2: manual struct building from pre-parsed fields
+        if ad_structures is None:
+            ad_structures = cls._build_ad_structures(service_info)
+            tier = ConversionTier.MANUAL
+
+        # Tier 3: enrich from BlueZ Device1 props when available
+        cls._enrich_from_platform_details(
+            ad_structures,
+            service_info,
+            raw_pdu_parsed=tier is ConversionTier.RAW_PDU,
+        )
+
+        # Always run interpreters for vendor-specific data
         interpreted_data, interpreter_name = cls._parse_payloads(service_info)
 
         return AdvertisementData(
@@ -120,6 +166,98 @@ class AdvertisementManager:
     # ------------------------------------------------------------------
 
     @classmethod
+    def _try_parse_raw(
+        cls, service_info: BluetoothServiceInfoBleak
+    ) -> AdvertisingDataStructures | None:
+        """Attempt to parse raw advertisement PDU bytes.
+
+        Returns parsed ``AdvertisingDataStructures`` with real BLE flags,
+        appearance, tx_power etc., or ``None`` if raw bytes are unavailable
+        or parsing fails.
+        """
+        raw: bytes | None = service_info.raw
+        if not raw:
+            return None
+
+        try:
+            parsed = _PDU_PARSER.parse_advertising_data(raw)
+            ad_structures = parsed.ad_structures
+
+            # Address is not in the AD payload — supplement from service_info
+            if not ad_structures.directed.le_bluetooth_device_address:
+                ad_structures.directed.le_bluetooth_device_address = (
+                    service_info.address
+                )
+
+            return ad_structures
+        except Exception:
+            _LOGGER.debug(
+                "Raw PDU parse failed for %s, falling back",
+                service_info.address,
+                exc_info=True,
+            )
+            return None
+
+    @classmethod
+    def _enrich_from_platform_details(
+        cls,
+        ad_structures: AdvertisingDataStructures,
+        service_info: BluetoothServiceInfoBleak,
+        *,
+        raw_pdu_parsed: bool,
+    ) -> None:
+        """Enrich ad_structures from BlueZ Device1 D-Bus properties.
+
+        BlueZ exposes ``Appearance`` (uint16), ``Class`` (uint32), and
+        ``AdvertisingFlags`` (bytes) via ``device.details["props"]``.
+        ESPHome devices only have ``{"address_type": int}`` — this method
+        is a no-op for them.
+        """
+        try:
+            details: Any = service_info.device.details
+            if not isinstance(details, dict):
+                return
+
+            props: dict[str, Any] | None = details.get("props")
+            if not isinstance(props, dict):
+                return
+
+            # Appearance → AppearanceData with full category/subcategory resolution
+            if ad_structures.properties.appearance is None:
+                appearance_val = props.get("Appearance")
+                if isinstance(appearance_val, int):
+                    info = appearance_values_registry.get_appearance_info(
+                        appearance_val
+                    )
+                    ad_structures.properties.appearance = AppearanceData(
+                        raw_value=appearance_val, info=info
+                    )
+
+            # Class of Device → full major/minor/service class decode
+            if ad_structures.properties.class_of_device is None:
+                class_val = props.get("Class")
+                if isinstance(class_val, int) and class_val != 0:
+                    ad_structures.properties.class_of_device = (
+                        class_of_device_registry.decode_class_of_device(class_val)
+                    )
+
+            # Real advertising flags from BlueZ — skip when raw PDU
+            # already provided authentic flags; otherwise merge into
+            # existing flags (add bits, never strip)
+            if not raw_pdu_parsed:
+                adv_flags_raw = props.get("AdvertisingFlags")
+                if isinstance(adv_flags_raw, (bytes, bytearray)) and adv_flags_raw:
+                    bluez_flags = BLEAdvertisingFlags(adv_flags_raw[0])
+                    ad_structures.properties.flags |= bluez_flags
+
+        except Exception:
+            _LOGGER.debug(
+                "Platform detail enrichment failed for %s",
+                service_info.address,
+                exc_info=True,
+            )
+
+    @classmethod
     def _build_ad_structures(
         cls, service_info: BluetoothServiceInfoBleak
     ) -> AdvertisingDataStructures:
@@ -127,13 +265,12 @@ class AdvertisementManager:
 
         Pure structural mapping — no library interpreter invocation.
         """
-        # Manufacturer data → ManufacturerData objects
+        # Manufacturer data → ManufacturerData objects with resolved company names
         manufacturer_data: dict[int, ManufacturerData] = {}
         if service_info.manufacturer_data:
             for company_id, payload in service_info.manufacturer_data.items():
-                manufacturer_data[company_id] = ManufacturerData(
-                    company=CompanyIdentifier(id=company_id, name="Unknown"),
-                    payload=payload,
+                manufacturer_data[company_id] = ManufacturerData.from_id_and_payload(
+                    company_id, payload
                 )
 
         # Service data → BluetoothUUID-keyed dict
@@ -156,10 +293,17 @@ class AdvertisementManager:
             uri_data=None,
         )
 
+        # Build advertising flags from available info:
+        # - BR_EDR_NOT_SUPPORTED is always set (all HA BLE devices are LE-only)
+        # - LE_GENERAL_DISCOVERABLE_MODE is set for connectable devices
+        flags = BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
+        if service_info.connectable:
+            flags |= BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE
+
         properties = DeviceProperties(
-            flags=BLEAdvertisingFlags(0),
+            flags=flags,
             appearance=None,
-            tx_power=0,
+            tx_power=service_info.tx_power or 0,
             le_role=None,
             le_supported_features=None,
             class_of_device=None,
@@ -171,7 +315,7 @@ class AdvertisementManager:
             directed=DirectedAdvertisingData(
                 public_target_address=[],
                 random_target_address=[],
-                le_bluetooth_device_address="",
+                le_bluetooth_device_address=service_info.address,
                 advertising_interval=None,
                 advertising_interval_long=None,
                 peripheral_connection_interval_range=None,
@@ -210,7 +354,7 @@ class AdvertisementManager:
     @classmethod
     def _parse_payloads(
         cls, service_info: BluetoothServiceInfoBleak
-    ) -> tuple[object | None, str | None]:
+    ) -> tuple[Any, str | None]:
         """Invoke library interpreters on advertisement payloads.
 
         Returns:
@@ -234,6 +378,7 @@ class AdvertisementManager:
             context = PayloadContext(
                 mac_address=service_info.address,
                 rssi=service_info.rssi or 0,
+                timestamp=service_info.time,
             )
             parsed_results = parse_advertising_payloads(
                 manufacturer_data=mfr_data_for_parse,
@@ -243,12 +388,6 @@ class AdvertisementManager:
             if parsed_results:
                 interpreted_data = parsed_results[0]
                 interpreter_name = type(interpreted_data).__name__
-                _LOGGER.debug(
-                    "Parsed advertising data for %s: %s from %s",
-                    service_info.address,
-                    interpreted_data,
-                    interpreter_name,
-                )
                 return interpreted_data, interpreter_name
         except Exception as exc:
             _LOGGER.debug(
@@ -358,7 +497,11 @@ class AdvertisementManager:
         """Extract manufacturer name from parsed advertisement data."""
         if advertisement.ad_structures.core.manufacturer_data:
             for mfr_data in advertisement.ad_structures.core.manufacturer_data.values():
-                if mfr_data.company and mfr_data.company.name:
+                if (
+                    mfr_data.company
+                    and mfr_data.company.name
+                    and not mfr_data.company.name.startswith("Unknown")
+                ):
                     return mfr_data.company.name
         if advertisement.interpreter_name:
             return advertisement.interpreter_name

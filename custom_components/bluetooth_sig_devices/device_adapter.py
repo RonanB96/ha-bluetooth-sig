@@ -22,26 +22,13 @@ from bleak_retry_connector import (
     close_stale_connections_by_address,
     establish_connection,
 )
-from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
 from bluetooth_sig.device.client import ClientManagerProtocol
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
 from bluetooth_sig.gatt.services.base import BaseGattService
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
-from bluetooth_sig.types.advertising import (
-    AdvertisementData,
-    AdvertisingDataStructures,
-    BLEAdvertisingFlags,
-    CoreAdvertisingData,
-    DeviceProperties,
-    DirectedAdvertisingData,
-    LocationAndSensingData,
-    MeshAndBroadcastData,
-    OOBSecurityData,
-    SecurityData,
-)
-from bluetooth_sig.types.company import CompanyIdentifier, ManufacturerData
+from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo, ServiceInfo
 from bluetooth_sig.types.device_types import DeviceService, ScannedDevice
 from bluetooth_sig.types.gatt_enums import GattProperty
@@ -50,6 +37,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
+from .advertisement_manager import AdvertisementManager
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
@@ -178,170 +166,23 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     def convert_advertisement(cls, advertisement: object) -> AdvertisementData:
         """Convert HA BluetoothServiceInfoBleak to bluetooth-sig AdvertisementData.
 
+        Delegates to ``AdvertisementManager.convert_advertisement`` which is
+        the single source of truth for HA → library advertisement conversion.
+
         Args:
             advertisement: Home Assistant's Bluetooth service info
 
         Returns:
             AdvertisementData compatible with bluetooth-sig-python library
+
+        Raises:
+            TypeError: If *advertisement* is not a ``BluetoothServiceInfoBleak``.
+
         """
-        # Type narrowing for Home Assistant's BluetoothServiceInfoBleak
         if not isinstance(advertisement, BluetoothServiceInfoBleak):
             msg = f"Expected BluetoothServiceInfoBleak, got {type(advertisement)}"
             raise TypeError(msg)
-
-        service_info: BluetoothServiceInfoBleak = advertisement
-        # Extract manufacturer data - convert to ManufacturerData objects
-        manufacturer_data: dict[int, ManufacturerData] = {}
-        if service_info.manufacturer_data:
-            for company_id, payload in service_info.manufacturer_data.items():
-                manufacturer_data[company_id] = ManufacturerData(
-                    company=CompanyIdentifier(id=company_id, name="Unknown"),
-                    payload=payload,
-                )
-
-        # Extract service data - convert to BluetoothUUID keys
-        service_data: dict[BluetoothUUID, bytes] = {}
-        if service_info.service_data:
-            for uuid_str, data in service_info.service_data.items():
-                service_data[BluetoothUUID(uuid_str)] = data
-
-        # Extract service UUIDs
-        service_uuids = []
-        if service_info.service_uuids:
-            service_uuids = [BluetoothUUID(uuid) for uuid in service_info.service_uuids]
-
-        # Get local name
-        local_name = service_info.name or ""
-
-        # Get RSSI
-        rssi = service_info.rssi
-
-        # Create CoreAdvertisingData with the extracted information
-        core_data = CoreAdvertisingData(
-            manufacturer_data=manufacturer_data,
-            service_data=service_data,
-            service_uuids=service_uuids,
-            solicited_service_uuids=[],
-            local_name=local_name,
-            uri_data=None,
-        )
-
-        # Create other advertising data structures with defaults
-        properties = DeviceProperties(
-            flags=BLEAdvertisingFlags(0),
-            appearance=None,
-            tx_power=0,
-            le_role=None,
-            le_supported_features=None,
-            class_of_device=None,
-        )
-
-        # Create AdvertisingDataStructures
-        ad_structures = AdvertisingDataStructures(
-            core=core_data,
-            properties=properties,
-            directed=DirectedAdvertisingData(
-                public_target_address=[],
-                random_target_address=[],
-                le_bluetooth_device_address="",
-                advertising_interval=None,
-                advertising_interval_long=None,
-                peripheral_connection_interval_range=None,
-            ),
-            oob_security=OOBSecurityData(
-                simple_pairing_hash_c=b"",
-                simple_pairing_randomizer_r=b"",
-                secure_connections_confirmation=b"",
-                secure_connections_random=b"",
-                security_manager_tk_value=b"",
-                security_manager_oob_flags=b"",
-            ),
-            location=LocationAndSensingData(
-                indoor_positioning=None,
-                three_d_information=None,
-                transport_discovery_data=None,
-                channel_map_update_indication=None,
-            ),
-            mesh=MeshAndBroadcastData(
-                mesh_message=None,
-                secure_network_beacon=None,
-                unprovisioned_device_beacon=None,
-                provisioning_bearer=None,
-                broadcast_name="",
-                broadcast_code=b"",
-                biginfo=b"",
-                periodic_advertising_response_timing=b"",
-                electronic_shelf_label=b"",
-            ),
-            security=SecurityData(
-                encrypted_advertising_data=b"",
-                resolvable_set_identifier=b"",
-            ),
-        )
-
-        # Parse advertising data using bluetooth-sig interpreters
-        interpreted_data = None
-        interpreter_name = None
-
-        # Prepare data for parsing
-        mfr_data_for_parse: dict[int, bytes] = {}
-        if service_info.manufacturer_data:
-            for company_id, payload in service_info.manufacturer_data.items():
-                mfr_data_for_parse[company_id] = payload
-                _LOGGER.debug(
-                    "Device %s has manufacturer data company ID: 0x%04X with %d bytes",
-                    service_info.address,
-                    company_id,
-                    len(payload),
-                )
-
-        svc_data_for_parse: dict[BluetoothUUID, bytes] = {}
-        if service_info.service_data:
-            for uuid_str, data in service_info.service_data.items():
-                svc_data_for_parse[BluetoothUUID(uuid_str)] = data
-                _LOGGER.debug(
-                    "Device %s has service data UUID: %s with %d bytes",
-                    service_info.address,
-                    uuid_str,
-                    len(data),
-                )
-
-        # Try to parse with the library's interpreters
-        if mfr_data_for_parse or svc_data_for_parse:
-            try:
-                context = PayloadContext(
-                    mac_address=service_info.address,
-                    rssi=rssi or 0,
-                )
-                parsed_results = parse_advertising_payloads(
-                    manufacturer_data=mfr_data_for_parse,
-                    service_data=svc_data_for_parse,
-                    context=context,
-                )
-                if parsed_results:
-                    # Use the first parsed result
-                    interpreted_data = parsed_results[0]
-                    interpreter_name = type(interpreted_data).__name__
-                    _LOGGER.debug(
-                        "Parsed advertising data for %s: %s from %s",
-                        service_info.address,
-                        interpreted_data,
-                        interpreter_name,
-                    )
-            except Exception as e:
-                _LOGGER.debug(
-                    "Failed to parse advertising data for %s: %s",
-                    service_info.address,
-                    e,
-                )
-
-        # Create and return AdvertisementData
-        return AdvertisementData(
-            ad_structures=ad_structures,
-            interpreted_data=interpreted_data,
-            interpreter_name=interpreter_name,
-            rssi=rssi,
-        )
+        return AdvertisementManager.convert_advertisement(advertisement)
 
     async def get_latest_advertisement(
         self, refresh: bool = False

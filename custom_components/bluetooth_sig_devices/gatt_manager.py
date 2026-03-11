@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
-from bluetooth_sig.types.gatt_enums import CharacteristicRole
+from bluetooth_sig.types.gatt_enums import CharacteristicName, CharacteristicRole
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -31,6 +31,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import discovery_flow
 from homeassistant.helpers.entity import EntityDescription
 
+from .advertisement_manager import AdvertisementManager
 from .const import (
     DEFAULT_CONNECTION_TIMEOUT,
     DOMAIN,
@@ -55,6 +56,15 @@ if TYPE_CHECKING:
     from .coordinator import BluetoothSIGCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# Resolve the Manufacturer Name String UUID from the library registry
+# so we can identify it during GATT reads without hardcoding.
+_manufacturer_cls = CharacteristicRegistry.get_characteristic_class(
+    CharacteristicName.MANUFACTURER_NAME_STRING
+)
+_MANUFACTURER_NAME_UUID: BluetoothUUID | None = (
+    _manufacturer_cls().uuid if _manufacturer_cls else None
+)
 
 
 class GATTManager:
@@ -335,6 +345,28 @@ class GATTManager:
                             )
                         )
 
+                        # Resolve manufacturer: advertisement first, GATT fallback
+                        manufacturer = ""
+                        try:
+                            advertisement = (
+                                AdvertisementManager.convert_advertisement(
+                                    service_info
+                                )
+                            )
+                            manufacturer = (
+                                AdvertisementManager.get_manufacturer_name(
+                                    advertisement
+                                )
+                                or ""
+                            )
+                        except Exception:
+                            _LOGGER.debug(
+                                "Could not extract advert manufacturer for %s",
+                                address,
+                            )
+                        if not manufacturer and result.manufacturer_name:
+                            manufacturer = result.manufacturer_name
+
                         discovery_flow.async_create_flow(
                             self._hass,
                             DOMAIN,
@@ -344,7 +376,8 @@ class GATTManager:
                                 name=service_info.name
                                 or f"Bluetooth Device {address[-8:]}",
                                 characteristics=characteristics_str,
-                                manufacturer="",
+                                manufacturer=manufacturer,
+                                rssi=service_info.rssi,
                             ),
                         )
                 else:
@@ -411,6 +444,14 @@ class GATTManager:
                 parsed_value = await device.read(str(char_uuid))  # type: ignore[attr-defined]
                 if parsed_value is None:
                     continue
+
+                # Capture manufacturer name from GATT if present
+                if (
+                    _MANUFACTURER_NAME_UUID is not None
+                    and char_uuid == _MANUFACTURER_NAME_UUID
+                    and isinstance(parsed_value, str)
+                ):
+                    probe_result.manufacturer_name = parsed_value
 
                 char_class: type[BaseCharacteristic[Any]] | None = (
                     CharacteristicRegistry.get_characteristic_class_by_uuid(char_uuid)

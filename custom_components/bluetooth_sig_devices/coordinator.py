@@ -659,19 +659,9 @@ class BluetoothSIGCoordinator:
         # Device has parseable advertisement data — fire discovery flow
         tracker.mark_discovery_triggered(address)
 
-        # Collect characteristic names for the discovery card
-        supported = self._support_detector.get_supported_characteristics(service_info)
-        manufacturer_interp = (
-            self._support_detector.check_manufacturer_support(service_info) or ""
-        )
-        char_names = self._support_detector.build_characteristics_summary(
-            address,
-            supported,
-            self.known_characteristics,
-            manufacturer_name=manufacturer_interp,
-        )
-
-        # Extract manufacturer name from advertisement data
+        # Convert advertisement once and reuse for both manufacturer
+        # support detection and company name extraction.
+        advertisement = None
         manufacturer = ""
         try:
             advertisement = AdvertisementManager.convert_advertisement(service_info)
@@ -680,6 +670,27 @@ class BluetoothSIGCoordinator:
             )
         except Exception:
             _LOGGER.debug("Could not extract manufacturer for %s", address)
+
+        # Fall back to GATT Manufacturer Name String if advert had none
+        if not manufacturer:
+            probe_result = gatt.probe_results.get(address)
+            if probe_result and probe_result.manufacturer_name:
+                manufacturer = probe_result.manufacturer_name
+
+        # Collect characteristic names for the discovery card
+        supported = self._support_detector.get_supported_characteristics(service_info)
+        manufacturer_interp = (
+            self._support_detector.check_manufacturer_support(
+                service_info, advertisement=advertisement
+            )
+            or ""
+        )
+        char_names = self._support_detector.build_characteristics_summary(
+            address,
+            supported,
+            self.known_characteristics,
+            manufacturer_name=manufacturer_interp,
+        )
 
         _LOGGER.info(
             "Firing discovery flow for device %s (%s) — characteristics: %s",
@@ -696,6 +707,7 @@ class BluetoothSIGCoordinator:
                 name=service_info.name or f"Bluetooth Device {address[-8:]}",
                 characteristics=char_names,
                 manufacturer=manufacturer,
+                rssi=service_info.rssi,
             ),
         )
 

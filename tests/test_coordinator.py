@@ -1435,6 +1435,93 @@ class TestEphemeralAddressFiltering:
 
         assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.last_seen_time
 
+    def test_no_metadata_rpa_range_is_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + RPA-range MAC (0x40-0x7F) is filtered by heuristic."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("5A:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
+
+    def test_no_metadata_nrpa_range_is_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + NRPA-range MAC (0x00-0x3F) is filtered by heuristic."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("1A:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "1A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
+
+    def test_no_metadata_reserved_range_not_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + reserved-range MAC (0x80-0xBF) is NOT filtered."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("AA:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 0
+
+    def test_real_rpa_flood_no_metadata_all_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Regression: all 14 RPA addresses from original issue report are filtered.
+
+        These addresses had no BlueZ/ESPHome metadata and were incorrectly
+        treated as stable, causing 14 spurious discovery flows.
+        """
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        rpa_addresses = [
+            "69:D1:8A:16:39:16",
+            "55:4B:2F:2A:50:7F",
+            "50:41:96:6E:D6:2B",
+            "56:2B:FA:C5:69:AE",
+            "6B:1C:D9:7A:B7:AB",
+            "58:38:DB:D8:74:F0",
+            "66:79:1D:DD:62:AE",
+            "4E:F4:2D:05:77:05",
+            "5A:3C:73:1A:B9:1E",
+            "5C:76:4C:69:80:D2",
+            "71:22:4D:B9:6F:C6",
+            "65:8B:54:95:02:C5",
+            "47:3C:57:DF:0A:BE",
+            "70:44:43:9B:2C:A5",
+        ]
+        for addr in rpa_addresses:
+            si = _make_service_info_with_addr_type(addr, address_type=None)
+            coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert len(coordinator.discovery_tracker.seen_devices) == 0
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == len(
+            rpa_addresses
+        )
+
 
 class TestStaleDeviceCleanup:
     """Test periodic stale device cleanup logic."""

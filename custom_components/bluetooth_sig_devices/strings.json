@@ -9,7 +9,7 @@
       },
       "integration_discovery_confirm": {
         "title": "Confirm Bluetooth SIG Device",
-        "description": "A Bluetooth SIG device was discovered:\n\n**{name}**{manufacturer}\n\n{characteristics}\n\nWould you like to add this device?"
+        "description": "A Bluetooth SIG device was discovered:\n\n**{name}**\nAddress: `{address}`{manufacturer}{rssi}\n\n{characteristics}\n\nWould you like to add this device?"
       }
     },
     "abort": {

@@ -51,7 +51,8 @@ class TestBluetoothSIGSensorEntityAvailable:
         self, entity: BluetoothSIGSensorEntity, caplog: pytest.LogCaptureFixture
     ) -> None:
         """First unavailability is logged and flag is set."""
-        result = self._call_available(entity, parent_available=False)
+        with caplog.at_level("INFO"):
+            result = self._call_available(entity, parent_available=False)
 
         assert result is False
         assert entity._unavailable_logged is True  # noqa: SLF001
@@ -75,7 +76,8 @@ class TestBluetoothSIGSensorEntityAvailable:
         """Recovery from unavailable logs 'back online' and resets the flag."""
         entity._unavailable_logged = True  # noqa: SLF001  # simulate prior unavailability
 
-        result = self._call_available(entity, parent_available=True)
+        with caplog.at_level("INFO"):
+            result = self._call_available(entity, parent_available=True)
 
         assert result is True
         assert entity._unavailable_logged is False  # noqa: SLF001
@@ -97,17 +99,18 @@ class TestBluetoothSIGSensorEntityAvailable:
         self, entity: BluetoothSIGSensorEntity, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Available → unavailable → available logs correct messages in order."""
-        self._call_available(entity, parent_available=True)
-        assert entity._unavailable_logged is False  # noqa: SLF001
+        with caplog.at_level("INFO"):
+            self._call_available(entity, parent_available=True)
+            assert entity._unavailable_logged is False  # noqa: SLF001
 
-        self._call_available(entity, parent_available=False)
-        assert entity._unavailable_logged is True  # noqa: SLF001
-        assert "unavailable" in caplog.text
+            self._call_available(entity, parent_available=False)
+            assert entity._unavailable_logged is True  # noqa: SLF001
+            assert "unavailable" in caplog.text
 
-        caplog.clear()
-        self._call_available(entity, parent_available=True)
-        assert entity._unavailable_logged is False  # noqa: SLF001
-        assert "back online" in caplog.text
+            caplog.clear()
+            self._call_available(entity, parent_available=True)
+            assert entity._unavailable_logged is False  # noqa: SLF001
+            assert "back online" in caplog.text
 
 
 class TestBluetoothSIGSensorEntityNativeValue:

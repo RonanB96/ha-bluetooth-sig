@@ -95,12 +95,16 @@ class CharacteristicSource(Enum):
     """
 
     ADVERTISEMENT = "advertisement"
-    MANUFACTURER = "manufacturer"
     GATT = "gatt"
 
 
 class DiscoveredCharacteristic(NamedTuple):
-    """A discovered characteristic's UUID and human-readable name."""
+    """A discovered GATT characteristic and its discovery source.
+
+    ``characteristic`` is the parsed ``BaseCharacteristic[Any]`` instance
+    from the bluetooth-sig library, and ``source`` records whether it was
+    discovered via advertising data or an active GATT probe.
+    """
 
     characteristic: BaseCharacteristic[Any]
     source: CharacteristicSource = CharacteristicSource.ADVERTISEMENT
@@ -113,6 +117,7 @@ class DiscoveryData(TypedDict):
     name: str
     characteristics: str
     manufacturer: str
+    rssi: int | None
 
 
 class GATTProbeSnapshotData(TypedDict):

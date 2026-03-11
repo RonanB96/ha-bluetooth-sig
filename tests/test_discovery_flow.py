@@ -66,6 +66,7 @@ class TestIntegrationDiscoveryFlow:
                 "name": DEVICE_NAME,
                 "characteristics": "Battery Level, Temperature",
                 "manufacturer": "",
+                "rssi": -65,
             },
         )
 
@@ -74,6 +75,8 @@ class TestIntegrationDiscoveryFlow:
         placeholders = result["description_placeholders"]
         assert placeholders["characteristics"] == "Battery Level, Temperature"
         assert placeholders["manufacturer"] == ""
+        assert placeholders["address"] == DEVICE_ADDRESS
+        assert "-65 dBm" in placeholders["rssi"]
 
     async def test_discovery_without_characteristics_shows_fallback(
         self,
@@ -91,6 +94,8 @@ class TestIntegrationDiscoveryFlow:
         placeholders = result["description_placeholders"]
         assert "Unknown" in placeholders["characteristics"]
         assert placeholders["manufacturer"] == ""
+        assert placeholders["address"] == DEVICE_ADDRESS
+        assert placeholders["rssi"] == ""
 
     async def test_discovery_shows_manufacturer_placeholder(
         self,
@@ -106,6 +111,7 @@ class TestIntegrationDiscoveryFlow:
                 "name": DEVICE_NAME,
                 "characteristics": "Temperature",
                 "manufacturer": "Acme Corp",
+                "rssi": -70,
             },
         )
 
@@ -113,7 +119,51 @@ class TestIntegrationDiscoveryFlow:
         placeholders = result["description_placeholders"]
         assert placeholders["manufacturer"] == "\nManufacturer: **Acme Corp**"
 
-    async def test_discovery_confirm_createsmake_device_entry(
+    async def test_discovery_shows_rssi_placeholder(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When RSSI is provided, signal strength appears in the card."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "",
+                "rssi": -55,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert "-55 dBm" in placeholders["rssi"]
+
+    async def test_discovery_hides_rssi_when_none(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When RSSI is None, the signal strength line is omitted."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "",
+                "rssi": None,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert placeholders["rssi"] == ""
+
+    async def test_discovery_confirm_creates_device_entry(
         self,
         hass: HomeAssistant,
         mock_bluetooth_disabled: Generator[None],

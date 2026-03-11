@@ -19,6 +19,7 @@ from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
+from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo
 from bluetooth_sig.types.gatt_enums import CharacteristicName
 from bluetooth_sig.types.uuid import BluetoothUUID
@@ -86,12 +87,20 @@ class SupportDetector:
     def check_manufacturer_support(
         self,
         service_info: BluetoothServiceInfoBleak,
+        advertisement: AdvertisementData | None = None,
     ) -> str | None:
-        """Return interpreter name if manufacturer data is parseable, else None."""
+        """Return interpreter name if manufacturer data is parseable, else None.
+
+        If *advertisement* is supplied it is reused; otherwise a fresh
+        conversion is performed.  Callers that also need the
+        ``AdvertisementData`` for other purposes should convert once and
+        pass the result here to avoid duplicate work.
+        """
         if not service_info.manufacturer_data:
             return None
         try:
-            advertisement = AdvertisementManager.convert_advertisement(service_info)
+            if advertisement is None:
+                advertisement = AdvertisementManager.convert_advertisement(service_info)
             if advertisement.interpreted_data is not None:
                 _LOGGER.debug(
                     "Device %s has interpreted manufacturer data: %s",
@@ -213,9 +222,20 @@ class SupportDetector:
                         len(svc_chars),
                     )
                     for char_name in svc_chars:
+                        char_name_str = str(char_name) if char_name else uuid_str
+                        resolved_uuid: BluetoothUUID | None = None
+                        if char_name:
+                            resolved_uuid = (
+                                self._translator.get_characteristic_uuid_by_name(
+                                    CharacteristicName(char_name_str)
+                                )
+                            )
+                        char_uuid_str = (
+                            str(resolved_uuid) if resolved_uuid else char_name_str
+                        )
                         instance = self._resolve_characteristic(
-                            name=str(char_name) if char_name else uuid_str,
-                            uuid_str=uuid_str,
+                            name=char_name_str,
+                            uuid_str=char_uuid_str,
                         )
                         found.append(
                             DiscoveredCharacteristic(
@@ -316,9 +336,7 @@ class SupportDetector:
                 if char_class is not None:
                     return char_class()
         return UnknownCharacteristic(
-            info=CharacteristicInfo(
-                uuid=BluetoothUUID(uuid_str), name="Unknown_" + name
-            )
+            info=CharacteristicInfo(uuid=BluetoothUUID(uuid_str), name=name)
         )
 
     @staticmethod
@@ -331,5 +349,5 @@ class SupportDetector:
         if char_class is not None:
             return char_class()
         return UnknownCharacteristic(
-            info=CharacteristicInfo(uuid=char_uuid, name="Unknown_" + fallback_name)
+            info=CharacteristicInfo(uuid=char_uuid, name=fallback_name)
         )

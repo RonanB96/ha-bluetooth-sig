@@ -35,6 +35,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_name: str | None = None
         self._discovered_characteristics: str = ""
         self._discovered_manufacturer: str = ""
+        self._discovered_rssi: int | None = None
 
     @staticmethod
     def async_get_options_flow(
@@ -108,6 +109,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         name: str = discovery_info.get("name") or f"Bluetooth Device {address[-8:]}"
         characteristics: str = discovery_info.get("characteristics", "")
         manufacturer: str = discovery_info.get("manufacturer", "")
+        rssi: int | None = discovery_info.get("rssi")
 
         _LOGGER.info(
             "Discovery flow received for device %s (%s)",
@@ -123,6 +125,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_name = name
         self._discovered_characteristics = characteristics
         self._discovered_manufacturer = manufacturer
+        self._discovered_rssi = rssi
 
         # Title shown in the "Discovered" list
         self.context["title_placeholders"] = {"name": name}
@@ -151,9 +154,15 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="integration_discovery_confirm",
             description_placeholders={
                 "name": self._discovered_name,
+                "address": self._discovered_address,
                 "manufacturer": (
                     f"\nManufacturer: **{self._discovered_manufacturer}**"
                     if self._discovered_manufacturer
+                    else ""
+                ),
+                "rssi": (
+                    f"\nSignal strength: **{self._discovered_rssi} dBm**"
+                    if self._discovered_rssi is not None
                     else ""
                 ),
                 "characteristics": self._discovered_characteristics
