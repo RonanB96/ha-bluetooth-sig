@@ -36,8 +36,8 @@ rules:
     comment: This integration does not provide service actions.
   config-entry-unloading: done
   docs-configuration-parameters:
-    status: exempt
-    comment: Single config entry with no configuration parameters.
+    status: done
+    comment: Hub entry has poll interval, concurrent connections, connection timeout, probe retries, and stale device timeout options. Device entries have GATT toggle and poll interval override.
   docs-installation-parameters:
     status: exempt
     comment: No installation parameters required.
@@ -78,8 +78,8 @@ rules:
   exception-translations: todo
   icon-translations: todo
   reconfiguration-flow:
-    status: exempt
-    comment: Single config entry with no reconfigurable options.
+    status: done
+    comment: Hub entry has options flow for global settings. Device entries have options flow for GATT toggle and poll interval override.
   repair-issues:
     status: exempt
     comment: No user-fixable repair scenarios exist. Bluetooth adapter availability is managed entirely by the HA Bluetooth component.

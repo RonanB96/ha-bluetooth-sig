@@ -446,7 +446,7 @@ async def test_connectable_device_gatt_probe_creates_entities(
         address=address,
         name=device["name"],
         parseable_count=3,
-        supported_char_uuids=[],
+        supported_char_uuids=(),
     )
 
     device_id = address.replace(":", "").lower()

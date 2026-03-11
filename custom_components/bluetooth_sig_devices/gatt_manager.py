@@ -13,10 +13,10 @@ Periodic GATT polling is handled by the HA-native
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
+from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.types.gatt_enums import CharacteristicName, CharacteristicRole
@@ -34,6 +34,7 @@ from homeassistant.helpers.entity import EntityDescription
 from .advertisement_manager import AdvertisementManager
 from .const import (
     DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_READ_TIMEOUT,
     DOMAIN,
     MAX_PROBE_FAILURES,
     BLEAddress,
@@ -89,6 +90,8 @@ class GATTManager:
         coordinator: BluetoothSIGCoordinator,
         *,
         max_concurrent_probes: int = 2,
+        connection_timeout: float = DEFAULT_CONNECTION_TIMEOUT,
+        max_probe_retries: int = MAX_PROBE_FAILURES,
     ) -> None:
         """Initialise the GATT manager.
 
@@ -96,10 +99,14 @@ class GATTManager:
             hass: Home Assistant instance.
             coordinator: Parent coordinator (for device instances, config checks).
             max_concurrent_probes: Max simultaneous BLE connections for probing.
+            connection_timeout: Timeout in seconds for establishing a BLE connection.
+            max_probe_retries: Maximum probe attempts before giving up on a device.
 
         """
         self._hass = hass
         self._coordinator = coordinator
+        self._connection_timeout = connection_timeout
+        self._max_probe_retries = max_probe_retries
 
         # GATT probe results cache
         self.probe_results: dict[BLEAddress, GATTProbeResult] = {}
@@ -149,7 +156,7 @@ class GATTManager:
             return self.probe_results[address]
 
         # Check if we've hit the failure limit
-        if self.probe_failures.get(address, 0) >= MAX_PROBE_FAILURES:
+        if self.probe_failures.get(address, 0) >= self._max_probe_retries:
             _LOGGER.debug(
                 "Skipping probe for %s - exceeded failure limit",
                 address,
@@ -232,7 +239,7 @@ class GATTManager:
                 address=address,
                 name=service_info.name,
                 parseable_count=parseable_count,
-                supported_char_uuids=supported_uuids,
+                supported_char_uuids=tuple(supported_uuids),
             )
 
             self.probe_results[address] = result
@@ -272,14 +279,20 @@ class GATTManager:
                 "Failed to probe device %s (attempt %d/%d): %s",
                 address,
                 self.probe_failures[address],
-                MAX_PROBE_FAILURES,
+                self._max_probe_retries,
                 err,
             )
             return None
 
         finally:
-            with contextlib.suppress(Exception):
+            try:
                 await device.disconnect()
+            except Exception as disc_err:
+                _LOGGER.warning(
+                    "Disconnect failed after probing %s: %s",
+                    address,
+                    disc_err,
+                )
 
     async def async_probe_and_setup(
         self,
@@ -292,7 +305,7 @@ class GATTManager:
         concurrent probes since the BLE adapter has limited slots.
         """
         address = service_info.address
-        probe_timeout = DEFAULT_CONNECTION_TIMEOUT + 15.0
+        probe_timeout = self._connection_timeout + 15.0
 
         async with self._probe_semaphore:
             _LOGGER.debug(
@@ -348,10 +361,8 @@ class GATTManager:
                         # Resolve manufacturer: advertisement first, GATT fallback
                         manufacturer = ""
                         try:
-                            advertisement = (
-                                AdvertisementManager.convert_advertisement(
-                                    service_info
-                                )
+                            advertisement = AdvertisementManager.convert_advertisement(
+                                service_info
                             )
                             manufacturer = (
                                 AdvertisementManager.get_manufacturer_name(
@@ -392,7 +403,7 @@ class GATTManager:
                     address,
                     probe_timeout,
                     self.probe_failures[address],
-                    MAX_PROBE_FAILURES,
+                    self._max_probe_retries,
                 )
             except Exception as err:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
@@ -401,18 +412,18 @@ class GATTManager:
                     address,
                     err,
                     self.probe_failures[address],
-                    MAX_PROBE_FAILURES,
+                    self._max_probe_retries,
                 )
             finally:
                 self.pending_probes.discard(address)
                 self._probe_tasks.pop(address, None)
 
             # Surface a single warning when a device exhausts all retries
-            if self.probe_failures.get(address, 0) >= MAX_PROBE_FAILURES:
+            if self.probe_failures.get(address, 0) >= self._max_probe_retries:
                 _LOGGER.warning(
                     "All %d GATT probe attempts failed for %s — "
                     "device cannot be auto-discovered via GATT",
-                    MAX_PROBE_FAILURES,
+                    self._max_probe_retries,
                     address,
                 )
 
@@ -423,25 +434,28 @@ class GATTManager:
     # Polling
     # ------------------------------------------------------------------
 
-    async def _read_chars_connected(
+    async def _build_gatt_entities(
         self,
         address: BLEAddress,
-        device: object,
+        device: Device,
         probe_result: GATTProbeResult,
-    ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
-        """Read characteristic values using an already-open BLE connection.
+        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription],
+        entity_names: dict[PassiveBluetoothEntityKey, str | None],
+        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool],
+        *,
+        log_context: str = "read",
+    ) -> None:
+        """Read characteristics and populate entity dicts.
 
-        Called inside ``async_probe_device`` while the connection is still
-        live. Returns ``None`` if no entities could be built (e.g. all
-        reads failed).
+        Shared by ``_read_chars_connected`` (probe-time) and
+        ``async_poll_gatt_characteristics`` (poll-time).
         """
-        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription] = {}
-        entity_names: dict[PassiveBluetoothEntityKey, str | None] = {}
-        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool] = {}
-
         for char_uuid in probe_result.supported_char_uuids:
             try:
-                parsed_value = await device.read(str(char_uuid))  # type: ignore[attr-defined]
+                parsed_value = await asyncio.wait_for(
+                    device.read(str(char_uuid)),
+                    timeout=DEFAULT_READ_TIMEOUT,
+                )
                 if parsed_value is None:
                     continue
 
@@ -457,6 +471,10 @@ class GATTManager:
                     CharacteristicRegistry.get_characteristic_class_by_uuid(char_uuid)
                 )
                 if not char_class:
+                    _LOGGER.debug(
+                        "No registered class for UUID %s, skipping",
+                        char_uuid.short_form,
+                    )
                     continue
 
                 char_instance: BaseCharacteristic[Any] = char_class()
@@ -503,11 +521,38 @@ class GATTManager:
 
             except Exception as err:
                 _LOGGER.warning(
-                    "Failed to read characteristic %s from %s during probe: %s",
+                    "Failed to %s characteristic %s from %s: %s",
+                    log_context,
                     char_uuid.short_form,
                     address,
                     err,
                 )
+
+    async def _read_chars_connected(
+        self,
+        address: BLEAddress,
+        device: Device,
+        probe_result: GATTProbeResult,
+    ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
+        """Read characteristic values using an already-open BLE connection.
+
+        Called inside ``async_probe_device`` while the connection is still
+        live. Returns ``None`` if no entities could be built (e.g. all
+        reads failed).
+        """
+        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription] = {}
+        entity_names: dict[PassiveBluetoothEntityKey, str | None] = {}
+        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool] = {}
+
+        await self._build_gatt_entities(
+            address,
+            device,
+            probe_result,
+            entity_descriptions,
+            entity_names,
+            entity_data,
+            log_context="read during probe",
+        )
 
         if not entity_data:
             return None
@@ -546,69 +591,15 @@ class GATTManager:
             entity_names: dict[PassiveBluetoothEntityKey, str | None] = {}
             entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool] = {}
 
-            for char_uuid in probe_result.supported_char_uuids:
-                try:
-                    parsed_value = await device.read(str(char_uuid))
-                    if parsed_value is None:
-                        continue
-
-                    char_class: type[BaseCharacteristic[Any]] | None = (
-                        CharacteristicRegistry.get_characteristic_class_by_uuid(
-                            char_uuid
-                        )
-                    )
-                    if not char_class:
-                        continue
-
-                    char_instance: BaseCharacteristic[Any] = char_class()
-                    char_name: str = char_instance.name
-                    char_unit: str = char_instance.unit
-
-                    role: CharacteristicRole = char_instance.role
-                    if role in SKIP_ROLES:
-                        _LOGGER.debug(
-                            "Skipping GATT %s (role=%s) from %s",
-                            char_name,
-                            role.value,
-                            address,
-                        )
-                        continue
-
-                    is_diagnostic = role in DIAGNOSTIC_ROLES
-
-                    if hasattr(parsed_value, "__struct_fields__"):
-                        add_struct_entities(
-                            None,
-                            f"gatt_{char_uuid.short_form}",
-                            char_name,
-                            parsed_value,
-                            char_unit,
-                            is_diagnostic,
-                            entity_descriptions,
-                            entity_names,
-                            entity_data,
-                            spec=char_instance.spec,
-                        )
-                    else:
-                        add_simple_entity(
-                            None,
-                            f"gatt_{char_uuid.short_form}",
-                            char_name,
-                            to_ha_state(parsed_value),
-                            char_unit,
-                            is_diagnostic,
-                            entity_descriptions,
-                            entity_names,
-                            entity_data,
-                        )
-
-                except Exception as err:
-                    _LOGGER.warning(
-                        "Failed to read characteristic %s from %s: %s",
-                        char_uuid.short_form,
-                        address,
-                        err,
-                    )
+            await self._build_gatt_entities(
+                address,
+                device,
+                probe_result,
+                entity_descriptions,
+                entity_names,
+                entity_data,
+                log_context="poll",
+            )
 
             if not entity_data:
                 return None
@@ -625,8 +616,14 @@ class GATTManager:
             return None
 
         finally:
-            with contextlib.suppress(Exception):
+            try:
                 await device.disconnect()
+            except Exception as disc_err:
+                _LOGGER.warning(
+                    "Disconnect failed after polling %s: %s",
+                    address,
+                    disc_err,
+                )
 
     async def async_poll_gatt_with_semaphore(
         self,
@@ -661,7 +658,7 @@ class GATTManager:
         if (
             address in self.probe_results
             or address in self.pending_probes
-            or self.probe_failures.get(address, 0) >= MAX_PROBE_FAILURES
+            or self.probe_failures.get(address, 0) >= self._max_probe_retries
         ):
             return
 
@@ -678,13 +675,13 @@ class GATTManager:
             connectable
             and address not in self.probe_results
             and address not in self.pending_probes
-            and self.probe_failures.get(address, 0) < MAX_PROBE_FAILURES
+            and self.probe_failures.get(address, 0) < self._max_probe_retries
         )
 
     def is_probes_exhausted(self, address: BLEAddress) -> bool:
         """Return True if all probe attempts have been used."""
         return (
-            self.probe_failures.get(address, 0) >= MAX_PROBE_FAILURES
+            self.probe_failures.get(address, 0) >= self._max_probe_retries
             or address in self.probe_results
         )
 

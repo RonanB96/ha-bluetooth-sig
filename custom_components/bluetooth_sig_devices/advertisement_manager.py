@@ -251,7 +251,7 @@ class AdvertisementManager:
                     ad_structures.properties.flags |= bluez_flags
 
         except Exception:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Platform detail enrichment failed for %s",
                 service_info.address,
                 exc_info=True,
@@ -390,7 +390,7 @@ class AdvertisementManager:
                 interpreter_name = type(interpreted_data).__name__
                 return interpreted_data, interpreter_name
         except Exception as exc:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Failed to parse advertising data for %s: %s",
                 service_info.address,
                 exc,
@@ -418,7 +418,7 @@ class AdvertisementManager:
     def on_advertisement_received(self, advertisement: AdvertisementData) -> None:
         """Handle receiving an advertisement."""
         self._latest_advertisement = advertisement
-        for cb in self._advertisement_callbacks:
+        for cb in list(self._advertisement_callbacks):
             cb(advertisement)
 
     def register_advertisement_callback(
@@ -469,6 +469,10 @@ class AdvertisementManager:
         if refresh:
             await self.get_latest_advertisement(refresh=True)
 
+        return self._get_cached_rssi()
+
+    def _get_cached_rssi(self) -> int | None:
+        """Return the cached RSSI, or ``None`` if unavailable."""
         if self._latest_advertisement is not None:
             return self._latest_advertisement.rssi
         return None
@@ -480,8 +484,9 @@ class AdvertisementManager:
             ValueError: If no advertisement with RSSI has been received yet.
 
         """
-        if self._latest_advertisement and self._latest_advertisement.rssi is not None:
-            return self._latest_advertisement.rssi
+        rssi = self._get_cached_rssi()
+        if rssi is not None:
+            return rssi
 
         raise ValueError(
             f"No RSSI available for {self._address}. "

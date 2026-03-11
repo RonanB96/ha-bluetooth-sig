@@ -10,6 +10,7 @@ Bluetooth integration with the bluetooth-sig-python library for both:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -233,7 +234,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     def on_advertisement_received(self, advertisement: AdvertisementData) -> None:
         """Handle receiving an advertisement."""
         self._latest_advertisement = advertisement
-        for callback in self._advertisement_callbacks:
+        for callback in list(self._advertisement_callbacks):
             callback(advertisement)
 
     def register_advertisement_callback(
@@ -322,13 +323,6 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             )
             self._is_connected = True
             self._mtu_size = self._client.mtu_size
-            # Try to acquire MTU to avoid warnings
-            if hasattr(self._client, "_acquire_mtu"):
-                try:
-                    await self._client._acquire_mtu()
-                    self._mtu_size = self._client.mtu_size
-                except Exception:
-                    pass  # Ignore MTU acquisition failures
             self._cached_services = None  # Clear cache on new connection
             _LOGGER.debug(
                 "Connected to %s (MTU: %d)",
@@ -336,7 +330,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 self._mtu_size,
             )
         except BleakError as err:
-            _LOGGER.debug("Failed to connect to %s: %s", self._address, err)
+            _LOGGER.warning("Failed to connect to %s: %s", self._address, err)
             self._is_connected = False
             self._client = None
             raise
@@ -346,10 +340,14 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
         if self._client:
             try:
                 if self._client.is_connected:
+                    # Stop active notifications before clearing callbacks
+                    for uuid_str in list(self._notification_callbacks):
+                        with contextlib.suppress(Exception):
+                            await self._client.stop_notify(uuid_str)
                     await self._client.disconnect()
                     _LOGGER.debug("Disconnected from %s", self._address)
             except BleakError as err:
-                _LOGGER.debug("Error disconnecting from %s: %s", self._address, err)
+                _LOGGER.warning("Error disconnecting from %s: %s", self._address, err)
             finally:
                 self._client = None
                 self._is_connected = False
@@ -386,7 +384,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             # Run in executor to avoid blocking I/O in event loop
             service_class: (
                 type[BaseGattService] | None
-            ) = await asyncio.get_event_loop().run_in_executor(
+            ) = await asyncio.get_running_loop().run_in_executor(
                 None, GattServiceRegistry.get_service_class_by_uuid, service_uuid
             )
             if service_class:
@@ -418,7 +416,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 # Run in executor to avoid blocking I/O in event loop
                 char_class: (
                     type[BaseCharacteristic[Any]] | None
-                ) = await asyncio.get_event_loop().run_in_executor(
+                ) = await asyncio.get_running_loop().run_in_executor(
                     None,
                     CharacteristicRegistry.get_characteristic_class_by_uuid,
                     char_uuid,
@@ -526,6 +524,26 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             self._address,
         )
 
+    def _find_descriptor_handle(self, desc_uuid: BluetoothUUID) -> int:
+        """Find a descriptor handle by UUID.
+
+        Raises:
+            RuntimeError: If not connected.
+            ValueError: If descriptor not found.
+
+        """
+        if not self._client or not self._client.is_connected:
+            raise RuntimeError("Not connected to device")
+
+        desc_uuid_str = str(desc_uuid).lower()
+        for service in self._client.services:
+            for char in service.characteristics:
+                for desc in char.descriptors:
+                    if desc.uuid.lower() == desc_uuid_str:
+                        return desc.handle
+
+        raise ValueError(f"Descriptor {desc_uuid} not found")
+
     async def read_gatt_descriptor(self, desc_uuid: BluetoothUUID) -> bytes:
         """Read a GATT descriptor.
 
@@ -540,19 +558,9 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             ValueError: If descriptor not found
 
         """
-        if not self._client or not self._client.is_connected:
-            raise RuntimeError("Not connected to device")
-
-        # Find descriptor by UUID
-        desc_uuid_str = str(desc_uuid).lower()
-        for service in self._client.services:
-            for char in service.characteristics:
-                for desc in char.descriptors:
-                    if desc.uuid.lower() == desc_uuid_str:
-                        data = await self._client.read_gatt_descriptor(desc.handle)
-                        return bytes(data)
-
-        raise ValueError(f"Descriptor {desc_uuid} not found")
+        handle = self._find_descriptor_handle(desc_uuid)
+        data = await self._client.read_gatt_descriptor(handle)  # type: ignore[union-attr]
+        return bytes(data)
 
     async def write_gatt_descriptor(
         self, desc_uuid: BluetoothUUID, data: bytes
@@ -568,19 +576,8 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             ValueError: If descriptor not found
 
         """
-        if not self._client or not self._client.is_connected:
-            raise RuntimeError("Not connected to device")
-
-        # Find descriptor by UUID
-        desc_uuid_str = str(desc_uuid).lower()
-        for service in self._client.services:
-            for char in service.characteristics:
-                for desc in char.descriptors:
-                    if desc.uuid.lower() == desc_uuid_str:
-                        await self._client.write_gatt_descriptor(desc.handle, data)
-                        return
-
-        raise ValueError(f"Descriptor {desc_uuid} not found")
+        handle = self._find_descriptor_handle(desc_uuid)
+        await self._client.write_gatt_descriptor(handle, data)  # type: ignore[union-attr]
 
     async def start_notify(
         self, char_uuid: BluetoothUUID, callback: Callable[[str, bytes], None]

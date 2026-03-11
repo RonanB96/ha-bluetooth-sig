@@ -7,7 +7,7 @@ and the ``GATTProbeResult`` data container used by the GATT manager.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.types.uuid import BluetoothUUID
@@ -159,7 +159,7 @@ class GATTProbeResult:
     address: BLEAddress
     name: str | None = None
     parseable_count: int = 0
-    supported_char_uuids: list[BluetoothUUID] = field(default_factory=list)
+    supported_char_uuids: tuple[BluetoothUUID, ...] = ()
     manufacturer_name: str | None = None
 
     def has_support(self) -> bool:

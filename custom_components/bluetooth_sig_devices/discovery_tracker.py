@@ -15,10 +15,10 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
+    DEFAULT_STALE_DEVICE_TIMEOUT,
     MAX_REJECTED_DEVICES,
     MAX_SEEN_DEVICES,
     STALE_DEVICE_CLEANUP_INTERVAL,
-    STALE_DEVICE_TIMEOUT_SECONDS,
     BLEAddress,
 )
 
@@ -44,13 +44,17 @@ class DiscoveryTracker:
         self,
         hass: HomeAssistant,
         coordinator: BluetoothSIGCoordinator,
+        *,
+        stale_device_timeout: int = DEFAULT_STALE_DEVICE_TIMEOUT,
     ) -> None:
         """Initialise the discovery tracker."""
         self._hass = hass
         self._coordinator = coordinator
+        self._stale_device_timeout = stale_device_timeout
 
         self.seen_devices: set[BLEAddress] = set()
         self.rejected_devices: set[BLEAddress] = set()
+        self.rejection_reasons: dict[BLEAddress, str] = {}
         self.discovery_triggered: set[BLEAddress] = set()
         self.last_seen_time: dict[BLEAddress, float] = {}
         self.filtered_ephemeral_count: int = 0
@@ -73,10 +77,12 @@ class DiscoveryTracker:
         """Record that a discovery flow has been fired for *address*."""
         self.discovery_triggered.add(address)
 
-    def mark_rejected(self, address: BLEAddress) -> None:
+    def mark_rejected(self, address: BLEAddress, reason: str = "") -> None:
         """Mark *address* as fully evaluated with no support."""
         if len(self.rejected_devices) < MAX_REJECTED_DEVICES:
             self.rejected_devices.add(address)
+            if reason:
+                self.rejection_reasons[address] = reason
 
     def record_sighting(self, address: BLEAddress) -> bool:
         """Record that *address* was seen in an advertisement.
@@ -119,6 +125,7 @@ class DiscoveryTracker:
             self.seen_devices.discard(addr)
             self.discovery_triggered.discard(addr)
             self.rejected_devices.discard(addr)
+            self.rejection_reasons.pop(addr, None)
             self.last_seen_time.pop(addr, None)
             # Also clean probe failure counts from the GATT manager
             self._coordinator.gatt_manager.probe_failures.pop(addr, None)
@@ -136,13 +143,13 @@ class DiscoveryTracker:
     def async_cleanup_stale_devices(self, _now: object = None) -> None:
         """Periodically remove stale entries from unbounded tracking sets.
 
-        Addresses that have not been seen for ``STALE_DEVICE_TIMEOUT_SECONDS``
+        Addresses that have not been seen for ``DEFAULT_STALE_DEVICE_TIMEOUT``
         are removed from all tracking sets and the coordinator's device cache.
         Addresses with active processor coordinators or config entries are
         never evicted.
         """
         now = time.monotonic()
-        cutoff = now - STALE_DEVICE_TIMEOUT_SECONDS
+        cutoff = now - self._stale_device_timeout
 
         coord = self._coordinator
         stale_addresses: list[BLEAddress] = [
@@ -161,6 +168,7 @@ class DiscoveryTracker:
             self.seen_devices.discard(addr)
             self.discovery_triggered.discard(addr)
             self.rejected_devices.discard(addr)
+            self.rejection_reasons.pop(addr, None)
             self.last_seen_time.pop(addr, None)
             gatt.probe_failures.pop(addr, None)
             gatt.probe_results.pop(addr, None)
@@ -171,6 +179,7 @@ class DiscoveryTracker:
             excess = len(self.rejected_devices) - MAX_REJECTED_DEVICES
             for addr in list(self.rejected_devices)[:excess]:
                 self.rejected_devices.discard(addr)
+                self.rejection_reasons.pop(addr, None)
                 self.last_seen_time.pop(addr, None)
 
         _LOGGER.debug(
@@ -203,6 +212,7 @@ class DiscoveryTracker:
 
         self.seen_devices.clear()
         self.rejected_devices.clear()
+        self.rejection_reasons.clear()
         self.discovery_triggered.clear()
         self.last_seen_time.clear()
 

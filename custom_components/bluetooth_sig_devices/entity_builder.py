@@ -534,7 +534,7 @@ def add_service_data_entities(
                 service_uuid,
             )
         except Exception:
-            _LOGGER.debug(
+            _LOGGER.warning(
                 "Could not parse service data for %s",
                 service_uuid,
                 exc_info=True,

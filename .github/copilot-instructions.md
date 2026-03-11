@@ -78,7 +78,7 @@ Both paths are completely separate and independent. Each produces `PassiveBlueto
 - **Support detection:** `SupportDetector` consolidates checking service data, manufacturer data, and GATT probes; produces `DiscoveredCharacteristic` lists and summaries; composed into coordinator
 - **Registry pre-warming:** `prewarm_registries()` static method run in executor during setup
 - **No RSSI entities** — handled by other BLE monitor integrations
-- **BLE address classification:** `classify_ble_address()` in `device_validator.py` checks **two metadata formats**: (1) BlueZ native: `device.details["props"]["AddressType"]` → `"public"`/`"random"`, (2) ESPHome proxy (via bleak-esphome): `device.details["address_type"]` → `0` (public) / `1` (random). Random addresses are sub-classified by top 2 bits of the first MAC octet per BT Core Spec §1.3. RPA (0x40–0x7F) and NRPA (0x00–0x3F) are filtered as ephemeral; Public, Random Static (0xC0–0xFF), and Unknown (no metadata) are treated as stable.
+- **BLE address classification:** `classify_ble_address()` in `device_validator.py` checks **two metadata formats**: (1) BlueZ native: `device.details["props"]["AddressType"]` → `"public"`/`"random"`, (2) ESPHome proxy (via bleak-esphome): `device.details["address_type"]` → `0` (public) / `1` (random). Random addresses are sub-classified by top 2 bits of the first MAC octet per BT Core Spec §1.3. RPA (0x40–0x7F) and NRPA (0x00–0x3F) are filtered as ephemeral; Public, Random Static (0xC0–0xFF), and Unknown (no metadata) are treated as stable. **When no metadata is present**, a MAC-based heuristic is applied: if the first octet falls in the RPA or NRPA range the address is classified as ephemeral (preventing wasted GATT probes and spurious discovery flows); otherwise it returns UNKNOWN (stable).
 - **Public diagnostics API:** `coordinator.get_diagnostics_snapshot()` returns all diagnostic data; `coordinator.is_device_active()` checks processor status
 
 ---
@@ -170,3 +170,13 @@ Key test helpers in `tests/bluetooth_helpers.py`: `load_fixture()`, `load_servic
 - **New platform** (e.g., `binary_sensor`): Add to `PLATFORMS` in `__init__.py`, create platform file following `sensor.py`, extend `_build_passive_bluetooth_update()` in coordinator
 - **Debug logging:** Set `custom_components.bluetooth_sig_devices: debug` and `bluetooth_sig: debug` in HA logger config
 - **Key references:** `ha_plan.md` (design rationale), `tests/conftest.py` (fixtures), `tests/bluetooth_helpers.py` (BLE injection), `tests/fixtures/` (captures), `quality_scale.yaml` (HA quality tracking)
+
+---
+
+## Upstream Library Issues
+
+When you encounter a problem, limitation, or missing functionality in the **`bluetooth-sig-python`** library that forces a workaround in this integration, **always flag it**. Do not silently work around library deficiencies — document them so they can be reported upstream.
+
+1. Add the issue to `UPSTREAM_ISSUES.md` in the repo root with a short description, the workaround used, and the status.
+2. Mark the workaround in code with a comment (e.g. `# UPSTREAM: see UPSTREAM_ISSUES.md`).
+3. If significant, open a GitHub issue on the library repo.

@@ -13,7 +13,14 @@ from custom_components.bluetooth_sig_devices import (
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.bluetooth_sig_devices.const import DOMAIN
+from custom_components.bluetooth_sig_devices.const import (
+    CONF_CONNECTION_TIMEOUT,
+    CONF_MAX_CONCURRENT_CONNECTIONS,
+    CONF_MAX_PROBE_RETRIES,
+    CONF_POLL_INTERVAL,
+    CONF_STALE_DEVICE_TIMEOUT,
+    DOMAIN,
+)
 
 from .conftest import make_device_entry, make_hub_entry
 
@@ -249,3 +256,66 @@ class TestInitEntryRouting:
         # Entry should not be loaded
         assert result is False
         assert dev.state == config_entries.ConfigEntryState.SETUP_RETRY
+
+
+class TestHubOptionsPassedToCoordinator:
+    """Verify that hub entry options are forwarded to coordinator construction."""
+
+    async def test_custom_hub_options_reach_coordinator(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """Hub options (poll_interval etc.) are passed to BluetoothSIGCoordinator."""
+        hub = make_hub_entry(
+            options={
+                CONF_POLL_INTERVAL: 120,
+                CONF_MAX_CONCURRENT_CONNECTIONS: 4,
+                CONF_CONNECTION_TIMEOUT: 60,
+                CONF_MAX_PROBE_RETRIES: 7,
+                CONF_STALE_DEVICE_TIMEOUT: 1800,
+            }
+        )
+        hub.add_to_hass(hass)
+
+        with (
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_discovered_service_info",
+                return_value=[],
+            ),
+        ):
+            result = await hass.config_entries.async_setup(hub.entry_id)
+
+        assert result is True
+        coordinator = hass.data[DOMAIN]["coordinator"]
+        assert coordinator.poll_interval == 120
+
+    async def test_default_hub_options_when_not_set(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When no hub options are set, coordinator uses defaults."""
+        hub = make_hub_entry()  # No options
+        hub.add_to_hass(hass)
+
+        with (
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_register_callback",
+                return_value=lambda: None,
+            ),
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator.bluetooth.async_discovered_service_info",
+                return_value=[],
+            ),
+        ):
+            result = await hass.config_entries.async_setup(hub.entry_id)
+
+        assert result is True
+        coordinator = hass.data[DOMAIN]["coordinator"]
+        # Default poll interval is 300 seconds (5 minutes)
+        assert coordinator.poll_interval == 300
