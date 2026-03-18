@@ -599,18 +599,18 @@ class TestKnownCharacteristics:
             coordinator.known_characteristics,
         )
 
-        expected = "**Advertising data:**\n  \u2022 Temperature\n  \u2022 Humidity"
+        expected = "**Advertising data:**\n  \u2022 Unknown: Temperature\n  \u2022 Unknown: Humidity"
         assert result == expected
         assert "AA:BB:CC:DD:EE:FF" in coordinator.known_characteristics
         temp_uuid_str = str(BluetoothUUID(0x2A6E))
         humidity_uuid_str = str(BluetoothUUID(0x2A6F))
         assert (
             coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][temp_uuid_str]
-            == "Temperature"
+            == "Unknown: Temperature"
         )
         assert (
             coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][humidity_uuid_str]
-            == "Humidity"
+            == "Unknown: Humidity"
         )
 
     def test_get_known_characteristics_merges_gatt(

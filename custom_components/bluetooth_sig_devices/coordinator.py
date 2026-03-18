@@ -26,15 +26,11 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any
 
+from bluetooth_sig import prewarm_registries as _lib_prewarm_registries
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
-from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.services.base import BaseGattService
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
-from bluetooth_sig.registry.company_identifiers import (
-    company_identifiers_registry,
-)
-from bluetooth_sig.registry.uuids.units import UnitsRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
@@ -231,12 +227,7 @@ class BluetoothSIGCoordinator:
         Called via ``hass.async_add_executor_job`` so the synchronous
         file I/O happens outside the event loop.
         """
-        CharacteristicRegistry.get_all_characteristics()
-        GattServiceRegistry.get_all_services()
-        GattServiceRegistry.get_service_class_by_uuid(BluetoothUUID("0000"))
-        CharacteristicRegistry.get_characteristic_class_by_uuid(BluetoothUUID("0000"))
-        UnitsRegistry.get_instance().get_all_units()  # type: ignore[attr-defined]
-        company_identifiers_registry._ensure_loaded()
+        _lib_prewarm_registries()
 
         BluetoothSIGCoordinator._cached_excluded_uuids = (
             BluetoothSIGCoordinator._build_excluded_uuids()

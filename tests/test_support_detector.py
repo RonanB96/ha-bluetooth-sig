@@ -329,7 +329,7 @@ class TestResolveCharacteristicByUuid:
             fallback_name="Custom Thing",
         )
         assert isinstance(result, UnknownCharacteristic)
-        assert result.name == "Custom Thing"
+        assert result.name == "Unknown: Custom Thing"
 
 
 # ---------------------------------------------------------------------------
@@ -370,44 +370,6 @@ class TestCheckServiceData:
         found = detector.get_supported_characteristics(si)
         # Battery Level is a characteristic UUID, found via char_info lookup
         assert len(found) >= 1
-
-
-# ---------------------------------------------------------------------------
-# _resolve_characteristic — name-based resolution (lines 326-338)
-# ---------------------------------------------------------------------------
-
-
-class TestResolveCharacteristic:
-    """Tests for SupportDetector._resolve_characteristic (name-based)."""
-
-    def test_resolve_known_characteristic_name(self) -> None:
-        """Known characteristic name resolves to typed instance."""
-        detector = _make_detector()
-        # get_service_characteristics() returns stringified enum members
-        result = detector._resolve_characteristic(
-            name="CharacteristicName.HEART_RATE_MEASUREMENT",
-            uuid_str="00002a37-0000-1000-8000-00805f9b34fb",
-        )
-        assert not isinstance(result, UnknownCharacteristic)
-
-    def test_resolve_unknown_name_returns_unknown(self) -> None:
-        """Unknown name falls back to UnknownCharacteristic."""
-        detector = _make_detector()
-        result = detector._resolve_characteristic(
-            name="TOTALLY_FAKE_CHARACTERISTIC",
-            uuid_str=UNKNOWN_UUID,
-        )
-        assert isinstance(result, UnknownCharacteristic)
-        assert result.name == "TOTALLY_FAKE_CHARACTERISTIC"
-
-    def test_resolve_name_not_in_enum_returns_unknown(self) -> None:
-        """Name that isn't a valid CharacteristicName enum returns Unknown."""
-        detector = _make_detector()
-        result = detector._resolve_characteristic(
-            name="not_a_valid_enum_member",
-            uuid_str=UNKNOWN_UUID,
-        )
-        assert isinstance(result, UnknownCharacteristic)
 
 
 # ---------------------------------------------------------------------------

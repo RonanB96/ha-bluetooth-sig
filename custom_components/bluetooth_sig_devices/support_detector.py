@@ -20,7 +20,6 @@ from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo
-from bluetooth_sig.types.gatt_enums import CharacteristicName
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
@@ -31,32 +30,6 @@ if TYPE_CHECKING:
     from .gatt_manager import GATTManager
 
 _LOGGER = logging.getLogger(__name__)
-
-_CHAR_NAME_PREFIX = "CharacteristicName."
-
-
-def _parse_characteristic_name(raw: str) -> CharacteristicName | None:
-    """Parse a characteristic name string into its enum member.
-
-    Handles both the stringified enum format returned by
-    ``BluetoothSIGTranslator.get_service_characteristics()``
-    (e.g. ``'CharacteristicName.HEART_RATE_MEASUREMENT'``)
-    and the human-readable enum value (e.g. ``'Heart Rate Measurement'``).
-    Returns *None* if the string cannot be resolved.
-
-    UPSTREAM: see UPSTREAM_ISSUES.md — ``get_service_characteristics()``
-    should return ``CharacteristicName`` enum members directly, not strings.
-    """
-    if raw.startswith(_CHAR_NAME_PREFIX):
-        member_name = raw[len(_CHAR_NAME_PREFIX) :]
-        try:
-            return CharacteristicName[member_name]
-        except KeyError:
-            return None
-    try:
-        return CharacteristicName(raw)
-    except ValueError:
-        return None
 
 
 class SupportDetector:
@@ -246,26 +219,10 @@ class SupportDetector:
                         svc_info.name,
                         len(svc_chars),
                     )
-                    for char_name in svc_chars:
-                        char_name_str = str(char_name) if char_name else uuid_str
-                        resolved_uuid: BluetoothUUID | None = None
-                        char_enum = _parse_characteristic_name(char_name_str)
-                        if char_enum is not None:
-                            resolved_uuid = (
-                                self._translator.get_characteristic_uuid_by_name(
-                                    char_enum
-                                )
-                            )
-                        char_uuid_str = (
-                            str(resolved_uuid) if resolved_uuid else char_name_str
-                        )
-                        instance = self._resolve_characteristic(
-                            name=char_name_str,
-                            uuid_str=char_uuid_str,
-                        )
+                    for char_instance in svc_chars:
                         found.append(
                             DiscoveredCharacteristic(
-                                characteristic=instance,
+                                characteristic=char_instance,
                                 source=CharacteristicSource.ADVERTISEMENT,
                             )
                         )
@@ -338,31 +295,6 @@ class SupportDetector:
     # ------------------------------------------------------------------
     # Characteristic resolution helpers
     # ------------------------------------------------------------------
-
-    def _resolve_characteristic(
-        self,
-        name: str,
-        uuid_str: str,
-    ) -> BaseCharacteristic[Any]:
-        """Resolve a characteristic name to a ``BaseCharacteristic`` instance.
-
-        Attempts to look up the characteristic by name via the translator,
-        falling back to an ``UnknownCharacteristic`` with the given *uuid_str*.
-        """
-        char_enum: CharacteristicName | None = None
-        char_enum = _parse_characteristic_name(name)
-
-        if char_enum is not None:
-            char_uuid = self._translator.get_characteristic_uuid_by_name(char_enum)
-            if char_uuid is not None:
-                char_class = CharacteristicRegistry.get_characteristic_class_by_uuid(
-                    char_uuid
-                )
-                if char_class is not None:
-                    return char_class()
-        return UnknownCharacteristic(
-            info=CharacteristicInfo(uuid=BluetoothUUID(uuid_str), name=name)
-        )
 
     @staticmethod
     def _resolve_characteristic_by_uuid(

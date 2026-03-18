@@ -16,6 +16,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
+from bluetooth_sig import is_struct_value, to_primitive
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
@@ -49,7 +50,6 @@ from .entity_builder import (
     SKIP_ROLES,
     add_simple_entity,
     add_struct_entities,
-    to_ha_state,
 )
 from .support_detector import SupportDetector
 
@@ -493,7 +493,7 @@ class GATTManager:
 
                 is_diagnostic = role in DIAGNOSTIC_ROLES
 
-                if hasattr(parsed_value, "__struct_fields__"):
+                if is_struct_value(parsed_value):
                     add_struct_entities(
                         None,
                         f"gatt_{char_uuid.short_form}",
@@ -511,7 +511,7 @@ class GATTManager:
                         None,
                         f"gatt_{char_uuid.short_form}",
                         char_name,
-                        to_ha_state(parsed_value),
+                        to_primitive(parsed_value),
                         char_unit,
                         is_diagnostic,
                         entity_descriptions,

@@ -32,7 +32,6 @@ from bluetooth_sig.gatt.services.registry import GattServiceRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo, ServiceInfo
 from bluetooth_sig.types.device_types import DeviceService, ScannedDevice
-from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -42,20 +41,6 @@ from .advertisement_manager import AdvertisementManager
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
-
-# Mapping from Bleak's lowercase property strings to GattProperty enum values
-_BLEAK_PROPERTY_MAP: dict[str, GattProperty] = {
-    "broadcast": GattProperty.BROADCAST,
-    "read": GattProperty.READ,
-    "write-without-response": GattProperty.WRITE_WITHOUT_RESPONSE,
-    "write": GattProperty.WRITE,
-    "notify": GattProperty.NOTIFY,
-    "indicate": GattProperty.INDICATE,
-    "authenticated-signed-writes": GattProperty.AUTHENTICATED_SIGNED_WRITES,
-    "extended-properties": GattProperty.EXTENDED_PROPERTIES,
-    "reliable-write": GattProperty.RELIABLE_WRITE,
-    "writable-auxiliaries": GattProperty.WRITABLE_AUXILIARIES,
-}
 
 
 class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
@@ -403,15 +388,6 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 char_uuid = BluetoothUUID(bleak_char.uuid)
                 char_uuid_str = str(char_uuid)
 
-                # Convert Bleak properties to GattProperty enum
-                properties: list[GattProperty] = []
-                for prop in bleak_char.properties:
-                    mapped = _BLEAK_PROPERTY_MAP.get(prop)
-                    if mapped is not None:
-                        properties.append(mapped)
-                    else:
-                        _LOGGER.warning("Unmapped Bleak GATT property: %s", prop)
-
                 # Get characteristic class from registry
                 # Run in executor to avoid blocking I/O in event loop
                 char_class: (
@@ -422,30 +398,14 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                     char_uuid,
                 )
                 if char_class:
-                    # Create characteristic instance with runtime properties from device.
-                    # Some library characteristic classes (e.g. CurrentTimeCharacteristic)
-                    # do not accept 'properties' — fall back to no-arg construction.
-                    try:
-                        char_instance: BaseCharacteristic[Any] = char_class(
-                            properties=properties
-                        )
-                    except TypeError:
-                        _LOGGER.debug(
-                            "Characteristic %s does not accept properties kwarg, "
-                            "using no-arg construction",
-                            char_uuid.short_form,
-                        )
-                        char_instance = char_class()
+                    char_instance: BaseCharacteristic[Any] = char_class()
                 else:
                     # Fallback: Create UnknownCharacteristic for unrecognized UUIDs
                     char_info = CharacteristicInfo(
                         uuid=char_uuid,
-                        name=bleak_char.description
-                        or f"Unknown Characteristic ({char_uuid.short_form})",
+                        name=bleak_char.description or "",
                     )
-                    char_instance = UnknownCharacteristic(
-                        info=char_info, properties=properties
-                    )
+                    char_instance = UnknownCharacteristic(info=char_info)
 
                 characteristics[char_uuid_str] = char_instance
 

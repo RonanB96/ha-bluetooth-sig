@@ -27,13 +27,6 @@ from bluetooth_sig.types.advertising import (
     AdvertisementData,
     AdvertisingDataStructures,
     BLEAdvertisingFlags,
-    CoreAdvertisingData,
-    DeviceProperties,
-    DirectedAdvertisingData,
-    LocationAndSensingData,
-    MeshAndBroadcastData,
-    OOBSecurityData,
-    SecurityData,
 )
 from bluetooth_sig.types.appearance import AppearanceData
 from bluetooth_sig.types.company import ManufacturerData
@@ -284,71 +277,14 @@ class AdvertisementManager:
         if service_info.service_uuids:
             service_uuids = [BluetoothUUID(u) for u in service_info.service_uuids]
 
-        core_data = CoreAdvertisingData(
+        return AdvertisingDataStructures.from_common_fields(
             manufacturer_data=manufacturer_data,
             service_data=service_data,
             service_uuids=service_uuids,
-            solicited_service_uuids=[],
             local_name=service_info.name or "",
-            uri_data=None,
-        )
-
-        # Build advertising flags from available info:
-        # - BR_EDR_NOT_SUPPORTED is always set (all HA BLE devices are LE-only)
-        # - LE_GENERAL_DISCOVERABLE_MODE is set for connectable devices
-        flags = BLEAdvertisingFlags.BR_EDR_NOT_SUPPORTED
-        if service_info.connectable:
-            flags |= BLEAdvertisingFlags.LE_GENERAL_DISCOVERABLE_MODE
-
-        properties = DeviceProperties(
-            flags=flags,
-            appearance=None,
             tx_power=service_info.tx_power or 0,
-            le_role=None,
-            le_supported_features=None,
-            class_of_device=None,
-        )
-
-        return AdvertisingDataStructures(
-            core=core_data,
-            properties=properties,
-            directed=DirectedAdvertisingData(
-                public_target_address=[],
-                random_target_address=[],
-                le_bluetooth_device_address=service_info.address,
-                advertising_interval=None,
-                advertising_interval_long=None,
-                peripheral_connection_interval_range=None,
-            ),
-            oob_security=OOBSecurityData(
-                simple_pairing_hash_c=b"",
-                simple_pairing_randomizer_r=b"",
-                secure_connections_confirmation=b"",
-                secure_connections_random=b"",
-                security_manager_tk_value=b"",
-                security_manager_oob_flags=b"",
-            ),
-            location=LocationAndSensingData(
-                indoor_positioning=None,
-                three_d_information=None,
-                transport_discovery_data=None,
-                channel_map_update_indication=None,
-            ),
-            mesh=MeshAndBroadcastData(
-                mesh_message=None,
-                secure_network_beacon=None,
-                unprovisioned_device_beacon=None,
-                provisioning_bearer=None,
-                broadcast_name="",
-                broadcast_code=b"",
-                biginfo=b"",
-                periodic_advertising_response_timing=b"",
-                electronic_shelf_label=b"",
-            ),
-            security=SecurityData(
-                encrypted_advertising_data=b"",
-                resolvable_set_identifier=b"",
-            ),
+            address=service_info.address,
+            connectable=service_info.connectable,
         )
 
     @classmethod

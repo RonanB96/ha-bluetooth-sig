@@ -11,6 +11,7 @@ import enum
 import logging
 from typing import Any
 
+from bluetooth_sig import is_struct_value, to_primitive
 from bluetooth_sig.advertising import SIGCharacteristicData
 from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
@@ -55,37 +56,11 @@ DIAGNOSTIC_ROLES: frozenset[CharacteristicRole] = frozenset(
 
 
 # ---------------------------------------------------------------------------
-# Value coercion
+# Value coercion — delegate to bluetooth_sig.to_primitive()
 # ---------------------------------------------------------------------------
 
-
-def to_ha_state(value: object) -> int | float | str | bool:
-    """Coerce any parsed characteristic value to an HA-compatible type.
-
-    Inspects the **actual value** at runtime using ``isinstance``, not
-    the declared ``python_type`` metadata.  This is forward-compatible:
-    when the library adds new types the ``str()`` fallback handles them.
-
-    Order matters:
-    - ``bool`` is checked before ``int`` (bool subclasses int)
-    - ``IntFlag`` is checked before the ``.name`` branch — bit-field
-      values have a ``.name`` attribute but should be stored as plain int
-    - ``IntEnum`` (and any enum with ``.name``) returns the member name
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, enum.IntFlag):  # must be before .name check
-        return int(value)
-    if (name := getattr(value, "name", None)) is not None:  # IntEnum, Enum, etc.
-        return str(name)
-    if isinstance(value, int):
-        return int(value)
-    if isinstance(value, float):
-        return value
-    if isinstance(value, str):
-        return value
-    # Everything else (datetime, timedelta, date, etc.)
-    return str(value)
+# Re-export for backward compatibility with tests and internal callers.
+to_ha_state = to_primitive
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +132,7 @@ def _add_leaf_entity(
 
     # Non-numeric struct fields (bool, enum, flag) should not
     # inherit the parent characteristic's unit.
-    field_ha_value = to_ha_state(field_value)
+    field_ha_value = to_primitive(field_value)
     is_numeric = (
         isinstance(field_ha_value, (int, float))
         and not isinstance(field_value, (bool, enum.IntFlag))
@@ -237,7 +212,7 @@ def add_struct_entities(
     per-field unit is available AND the spec has multiple units, the
     parent unit is dropped to avoid incorrect labelling.
     """
-    if not hasattr(struct_value, "__struct_fields__"):
+    if not is_struct_value(struct_value):
         _LOGGER.debug("Value for %s is not a struct, cannot extract fields", char_name)
         return
 
@@ -248,12 +223,13 @@ def add_struct_entities(
     else:
         has_multiple_units = False
 
-    for field_name in struct_value.__struct_fields__:
+    fields: tuple[str, ...] = struct_value.__struct_fields__  # type: ignore[attr-defined]
+    for field_name in fields:
         field_value = getattr(struct_value, field_name)
         qualified_name = f"{_prefix}{field_name}" if _prefix else field_name
 
         # Recurse into nested structs
-        if hasattr(field_value, "__struct_fields__"):
+        if is_struct_value(field_value):
             add_struct_entities(
                 device_id,
                 uuid,
@@ -391,7 +367,7 @@ def add_sig_characteristic_entity(
         seen_uuids.add(str(data.uuid).lower())
 
     # Route on the actual value, not declared python_type
-    if hasattr(parsed_value, "__struct_fields__"):
+    if is_struct_value(parsed_value):
         add_struct_entities(
             device_id,
             str(data.uuid),
@@ -409,7 +385,7 @@ def add_sig_characteristic_entity(
             device_id,
             str(data.uuid),
             char_name,
-            to_ha_state(parsed_value),
+            to_primitive(parsed_value),
             unit,
             is_diagnostic,
             entity_descriptions,
@@ -527,7 +503,7 @@ def add_service_data_entities(
             )
 
             entity_names[entity_key] = svc_name
-            entity_data[entity_key] = to_ha_state(parsed_value)
+            entity_data[entity_key] = to_primitive(parsed_value)
         except SpecialValueDetectedError:
             _LOGGER.debug(
                 "Service data %s contains special sentinel value, skipping",
