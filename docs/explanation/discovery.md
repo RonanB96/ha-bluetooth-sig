@@ -69,6 +69,6 @@ After you confirm a device, the integration creates sensor entities for each sup
 
 ### What happens to ignored devices
 
-If a device is evaluated and no parseable data is found (including after exhausting connection attempts), it is marked as **rejected**. Rejected devices are not re-evaluated unless Home Assistant is restarted.
+If a device is evaluated and no parseable data is found (including after exhausting connection attempts), it is marked as **rejected**. Rejected devices are not re-evaluated unless the stale device timeout expires (default: 1 hour) or Home Assistant is restarted.
 
 The rejection list is bounded to prevent excessive memory usage in environments with many Bluetooth devices.

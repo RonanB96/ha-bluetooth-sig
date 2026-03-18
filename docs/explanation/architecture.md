@@ -73,6 +73,8 @@ This approach is needed because the integration cannot know in advance which dev
 
 **No hardcoded device lists**: All characteristic parsing, naming, and unit assignment come from the upstream parsing library. When the library adds support for a new Bluetooth characteristic, this integration supports it automatically — no update needed here.
 
+**Clear library boundary**: The [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library owns all Bluetooth data parsing — characteristic registries, binary decoding, role classification, unit resolution, and manufacturer data interpretation. This integration owns the Home Assistant side — device discovery, config flow, entity creation, GATT polling lifecycle, and mapping parsed data to HA entity properties (device class, state class, entity category). If a SIG defined characteristic is not being parsed correctly, the fix belongs in the library. If an entity is not being created or displayed correctly, the fix belongs here.
+
 **Resource limits**: In environments with many Bluetooth devices, the integration limits how many devices it tracks, how many connections it opens simultaneously, and how long it remembers devices that are no longer in range. This prevents it from consuming excessive memory or radio time.
 
 **Two data paths**: Broadcast monitoring and connected reads operate independently. This means a device that only broadcasts still works perfectly, and a device that requires connections gets polled without affecting broadcast-only devices.

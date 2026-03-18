@@ -87,5 +87,5 @@ flowchart TD
 
 1. **Simple values** (a single number or string) become one sensor entity each
 2. **Multi-field values** (e.g., Heart Rate Measurement with heart rate + energy expended) are expanded into one entity per field
-3. **Units and device classes** are assigned automatically based on the Bluetooth SIG specification — the integration does not hardcode these
-4. **Measurement characteristics** are visible by default; **status/info characteristics** are created as diagnostic entities (disabled by default); **control characteristics** are not exposed as sensors
+3. **Units and device classes** are assigned automatically based on the Bluetooth SIG specification
+4. **Entity visibility** depends on the characteristic's role — see [Characteristic Roles](roles.md) for details

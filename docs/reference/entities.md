@@ -48,7 +48,7 @@ Units like `Pa`, `ppm`, `ppb` are deliberately excluded from automatic mapping b
 
 ## Entity categories
 
-Entities are categorised based on the characteristic's role in the GATT specification:
+Entities are categorised based on the characteristic's role in the GATT specification. Roles are assigned by the [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library — not hardcoded in this integration. For a detailed explanation of how roles are classified and why, see [Characteristic Roles](../explanation/roles.md).
 
 ```mermaid
 flowchart LR
@@ -66,10 +66,10 @@ flowchart LR
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Measurement, Unknown | Normal sensor entity — visible and enabled by default                                                                                                                        |
 | Status, Info         | Diagnostic entity — disabled by default in the entity registry. Enable manually if needed (see [troubleshooting](../how-to/troubleshooting.md#diagnostic-entities-disabled)) |
-| Control, Feature     | No entity created — these are write-oriented characteristics, not suitable for sensors                                                                                       |
+| Control, Feature     | No entity created — these are write-oriented characteristics, not suitable for read-only sensors. **Write support is planned for a future release** (see [Planned features](../index.md#planned-features) and [Characteristic Roles](../explanation/roles.md#future-writable-support)). |
 
 ## Availability
 
-Entities become **unavailable** when the Home Assistant Bluetooth stack stops receiving advertisements from the device (typically after ~10 minutes of silence). They return to **available** when the next advertisement is received.
+Entities become **unavailable** when the Home Assistant Bluetooth stack stops receiving advertisements from the device (typically after ~15 minutes of silence). They return to **available** when the next advertisement is received.
 
 For GATT-polled entities, availability also depends on the success of the most recent BLE connection and characteristic read.
