@@ -37,7 +37,7 @@ from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
-from .advertisement_manager import AdvertisementManager
+from .advertisement_converter import convert_advertisement as _convert_advertisement
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
@@ -152,8 +152,8 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     def convert_advertisement(cls, advertisement: object) -> AdvertisementData:
         """Convert HA BluetoothServiceInfoBleak to bluetooth-sig AdvertisementData.
 
-        Delegates to ``AdvertisementManager.convert_advertisement`` which is
-        the single source of truth for HA → library advertisement conversion.
+        Delegates to ``advertisement_converter.convert_advertisement()``
+        which is the single source of truth for HA → library conversion.
 
         Args:
             advertisement: Home Assistant's Bluetooth service info
@@ -168,7 +168,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
         if not isinstance(advertisement, BluetoothServiceInfoBleak):
             msg = f"Expected BluetoothServiceInfoBleak, got {type(advertisement)}"
             raise TypeError(msg)
-        return AdvertisementManager.convert_advertisement(advertisement)
+        return _convert_advertisement(advertisement)
 
     async def get_latest_advertisement(
         self, refresh: bool = False

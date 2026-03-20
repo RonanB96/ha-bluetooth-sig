@@ -31,7 +31,6 @@ from bluetooth_sig.core.translator import BluetoothSIGTranslator
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.services.base import BaseGattService
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
-from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
@@ -46,17 +45,12 @@ from homeassistant.components.bluetooth.active_update_processor import (
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataProcessor,
     PassiveBluetoothDataUpdate,
-    PassiveBluetoothEntityKey,
 )
 from homeassistant.components.sensor import SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers import discovery_flow
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import EntityDescription
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .advertisement_manager import AdvertisementManager
 from .const import (
     CONF_DEVICE_POLL_INTERVAL,
     CONF_GATT_ENABLED,
@@ -66,16 +60,12 @@ from .const import (
     BLEAddress,
     DeviceStatistics,
     DiagnosticsSnapshot,
-    DiscoveryData,
     GATTProbeSnapshotData,
 )
-from .device_adapter import HomeAssistantBluetoothAdapter
+from .data_pipeline import update_device as _update_device_pipeline
 from .device_validator import is_static_address
+from .discovery_orchestrator import DiscoveryOrchestrator
 from .discovery_tracker import DiscoveryTracker
-from .entity_builder import (
-    add_interpreted_entities,
-    add_service_data_entities,
-)
 from .gatt_manager import GATTManager
 from .support_detector import SupportDetector
 
@@ -141,12 +131,15 @@ class BluetoothSIGCoordinator:
         self._cancel_discovery: CALLBACK_TYPE | None = None
 
         # --- Sub-managers ---
+        self._discovery_orchestrator = DiscoveryOrchestrator(self)
         self._gatt_manager = GATTManager(
             hass,
             self,
             max_concurrent_probes=max_concurrent_probes,
             connection_timeout=float(connection_timeout),
             max_probe_retries=max_probe_retries,
+            on_probe_success=self._discovery_orchestrator.handle_probe_success,
+            on_probe_failure=self._discovery_orchestrator.handle_probe_failure,
         )
         self._discovery_tracker = DiscoveryTracker(
             hass, self, stale_device_timeout=stale_device_timeout
@@ -379,10 +372,9 @@ class BluetoothSIGCoordinator:
 
         The closure delegates to
         ``GATTManager.async_poll_gatt_with_semaphore`` and raises
-        ``RuntimeError`` if no data is returned (handled gracefully by
-        the ``ActiveBluetoothProcessorCoordinator`` error handler).
-
-        Returns an empty update if GATT is disabled for this device.
+        ``RuntimeError`` for unexpected states (for example, polling while
+        GATT is disabled or no data returned), handled gracefully by the
+        ``ActiveBluetoothProcessorCoordinator`` error handler.
         """
         gatt = self._gatt_manager
 
@@ -434,6 +426,17 @@ class BluetoothSIGCoordinator:
         self._gatt_manager.remove_device(address)
         self._discovery_tracker.remove_device(address)
 
+    def cleanup_cached_device(self, address: BLEAddress) -> None:
+        """Remove cached state for a stale or evicted device.
+
+        Called by ``DiscoveryTracker`` during stale cleanup and LRU
+        eviction.  Cleans coordinator-owned state and delegates
+        GATT state cleanup to ``GATTManager.remove_device()``.
+        """
+        self.devices.pop(address, None)
+        self.known_characteristics.pop(address, None)
+        self._gatt_manager.remove_device(address)
+
     # ------------------------------------------------------------------
     # Device data update pipeline
     # ------------------------------------------------------------------
@@ -442,114 +445,11 @@ class BluetoothSIGCoordinator:
         self, service_info: BluetoothServiceInfoBleak
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool]:
         """Update device data from Bluetooth advertisement."""
-        address = service_info.address
-        is_first_update = address not in self.devices
-
-        _LOGGER.debug(
-            "Processing device %s (name=%s, rssi=%s, mfr_data=%d, svc_data=%d)",
-            address,
-            service_info.name or "unknown",
-            service_info.rssi,
-            len(service_info.manufacturer_data)
-            if service_info.manufacturer_data
-            else 0,
-            len(service_info.service_data) if service_info.service_data else 0,
-        )
-
-        if is_first_update:
-            _LOGGER.info(
-                "Device %s: first advertisement update received (name=%s)",
-                address,
-                service_info.name or "unknown",
-            )
-
-        # Get or create device instance
-        if address not in self.devices:
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, address, connectable=True
-            )
-            adapter = HomeAssistantBluetoothAdapter(
-                address,
-                service_info.name or "",
-                hass=self.hass,
-                ble_device=ble_device,
-            )
-            self.devices[address] = Device(
-                connection_manager=adapter,
-                translator=self.translator,
-            )
-            _LOGGER.debug("Created new device for address %s", address)
-
-        # Convert advertisement using AdvertisementManager
-        advertisement = AdvertisementManager.convert_advertisement(service_info)
-
-        return self._build_passive_bluetooth_update(
-            address, service_info, advertisement
-        )
-
-    def _build_passive_bluetooth_update(
-        self,
-        address: BLEAddress,
-        service_info: BluetoothServiceInfoBleak,
-        advertisement: AdvertisementData,
-    ) -> PassiveBluetoothDataUpdate[float | int | str | bool]:
-        """Build PassiveBluetoothDataUpdate from advertisement data."""
-        devices: dict[str | None, DeviceInfo] = {}
-        entity_descriptions: dict[PassiveBluetoothEntityKey, EntityDescription] = {}
-        entity_names: dict[PassiveBluetoothEntityKey, str | None] = {}
-        entity_data: dict[PassiveBluetoothEntityKey, float | int | str | bool] = {}
-
-        device_name = service_info.name or f"Bluetooth Device {address[-8:]}"
-        devices[None] = DeviceInfo(
-            name=device_name,
-            manufacturer=AdvertisementManager.get_manufacturer_name(advertisement),
-            model=AdvertisementManager.get_model_name(advertisement),
-        )
-
-        # Process interpreted data if available
-        seen_uuids: set[str] = set()
-        if advertisement.interpreted_data:
-            _LOGGER.debug(
-                "Device %s has interpreted data from %s: %s",
-                address,
-                advertisement.interpreter_name,
-                advertisement.interpreted_data,
-            )
-            add_interpreted_entities(
-                None,
-                advertisement.interpreter_name,
-                advertisement.interpreted_data,
-                entity_descriptions,
-                entity_names,
-                entity_data,
-                seen_uuids=seen_uuids,
-            )
-
-        # Process service data for standard GATT characteristics
-        if advertisement.ad_structures.core.service_data:
-            add_service_data_entities(
-                None,
-                advertisement.ad_structures.core.service_data,
-                self.translator,
-                entity_descriptions,
-                entity_names,
-                entity_data,
-                skip_uuids=seen_uuids if advertisement.interpreted_data else set(),
-            )
-
-        _LOGGER.debug(
-            "Device %s: built update with %d entities (descriptions=%d, names=%d)",
-            address,
-            len(entity_data),
-            len(entity_descriptions),
-            len(entity_names),
-        )
-
-        return PassiveBluetoothDataUpdate(
-            devices=devices,
-            entity_descriptions=entity_descriptions,
-            entity_names=entity_names,
-            entity_data=entity_data,
+        return _update_device_pipeline(
+            service_info,
+            hass=self.hass,
+            devices=self.devices,
+            translator=self.translator,
         )
 
     # ------------------------------------------------------------------
@@ -639,110 +539,12 @@ class BluetoothSIGCoordinator:
         self,
         service_info: BluetoothServiceInfoBleak,
     ) -> None:
-        """Handle a discovered BLE device.
+        """Route a discovered BLE device to the correct handling path."""
+        self._discovery_orchestrator.ensure_device_processor(service_info)
 
-        For devices with a confirmed config entry, schedules GATT probing
-        if applicable.  For new devices with parseable data, fires a
-        standard HA discovery flow.
-        """
-        address = service_info.address
-        tracker = self._discovery_tracker
-        gatt = self._gatt_manager
-
-        # Skip if we already have a processor
-        if address in self._processor_coordinators:
-            return
-
-        # Skip fully-evaluated devices with no support
-        if tracker.is_rejected(address):
-            return
-
-        # If a config entry already exists, just handle GATT probing
-        if self.has_config_entry(address):
-            if (
-                service_info.connectable
-                and self._is_gatt_enabled(address)
-                and gatt.can_probe(address, service_info.connectable)
-            ):
-                gatt.schedule_probe(service_info)
-            return
-
-        # Already triggered discovery for this address
-        if tracker.is_discovery_triggered(address):
-            _LOGGER.debug("Device %s: discovery already triggered — skipping", address)
-            return
-
-        # Check if we have supported data from advertisement
-        has_advert_data = self._support_detector.has_supported_data(service_info)
-
-        # If no advertisement data is interpretable, try GATT probing
-        if not has_advert_data:
-            if gatt.can_probe(address, service_info.connectable):
-                gatt.schedule_probe(service_info)
-            elif not service_info.connectable:
-                reason = "non-connectable with no parseable advertisement data"
-                tracker.mark_rejected(address, reason)
-                _LOGGER.info("Device %s rejected: %s", address, reason)
-            elif gatt.is_probes_exhausted(address):
-                reason = "all GATT probe attempts exhausted"
-                tracker.mark_rejected(address, reason)
-                _LOGGER.info("Device %s rejected: %s", address, reason)
-            return
-
-        # Device has parseable advertisement data — fire discovery flow
-        tracker.mark_discovery_triggered(address)
-
-        # Convert advertisement once and reuse for both manufacturer
-        # support detection and company name extraction.
-        advertisement = None
-        manufacturer = ""
-        try:
-            advertisement = AdvertisementManager.convert_advertisement(service_info)
-            manufacturer = (
-                AdvertisementManager.get_manufacturer_name(advertisement) or ""
-            )
-        except Exception:
-            _LOGGER.warning("Could not extract manufacturer for %s", address)
-
-        # Fall back to GATT Manufacturer Name String if advert had none
-        if not manufacturer:
-            probe_result = gatt.probe_results.get(address)
-            if probe_result and probe_result.manufacturer_name:
-                manufacturer = probe_result.manufacturer_name
-
-        # Collect characteristic names for the discovery card
-        supported = self._support_detector.get_supported_characteristics(service_info)
-        manufacturer_interp = (
-            self._support_detector.check_manufacturer_support(
-                service_info, advertisement=advertisement
-            )
-            or ""
-        )
-        char_names = self._support_detector.build_characteristics_summary(
-            address,
-            supported,
-            self.known_characteristics,
-            manufacturer_name=manufacturer_interp,
-        )
-
-        _LOGGER.info(
-            "Firing discovery flow for device %s (%s) — characteristics: %s",
-            address,
-            service_info.name or "unknown",
-            char_names or "none",
-        )
-        discovery_flow.async_create_flow(
-            self.hass,
-            DOMAIN,
-            context={"source": "integration_discovery"},
-            data=DiscoveryData(
-                address=address,
-                name=service_info.name or f"Bluetooth Device {address[-8:]}",
-                characteristics=char_names,
-                manufacturer=manufacturer,
-                rssi=service_info.rssi,
-            ),
-        )
+    # ------------------------------------------------------------------
+    # GATT probe callbacks (delegated to DiscoveryOrchestrator)
+    # ------------------------------------------------------------------
 
     async def async_stop(self) -> None:
         """Stop the coordinator."""

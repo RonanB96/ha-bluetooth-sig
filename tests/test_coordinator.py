@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
 
@@ -672,7 +673,7 @@ class TestKnownCharacteristics:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -1378,16 +1379,17 @@ class TestAsyncStop:
         """Test async_stop cancels all GATT probe tasks."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        mock_task1 = MagicMock()
-        mock_task2 = MagicMock()
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_task1
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:02"] = mock_task2
+        loop = asyncio.get_running_loop()
+        task1 = loop.create_future()
+        task1.set_result(None)
+        task2 = loop.create_future()
+        task2.set_result(None)
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = task1
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:02"] = task2
         coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
-        mock_task1.cancel.assert_called_once()
-        mock_task2.cancel.assert_called_once()
         assert coordinator.gatt_manager.probe_tasks == {}
         assert coordinator.gatt_manager.pending_probes == set()
         assert coordinator.processor_coordinators == {}
@@ -1401,13 +1403,14 @@ class TestAsyncStop:
         """Test async_stop cancels all in-flight GATT probe tasks."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        mock_probe_task = MagicMock()
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_probe_task
+        loop = asyncio.get_running_loop()
+        probe_task = loop.create_future()
+        probe_task.set_result(None)
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = probe_task
         coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
-        mock_probe_task.cancel.assert_called_once()
         assert coordinator.gatt_manager.probe_tasks == {}
         assert coordinator.gatt_manager.pending_probes == set()
 

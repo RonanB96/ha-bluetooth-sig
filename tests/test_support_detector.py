@@ -384,9 +384,7 @@ class TestCheckManufacturerSupportInterpreted:
         """Returns interpreter name when interpreted_data is not None."""
         from unittest.mock import patch as mock_patch
 
-        from custom_components.bluetooth_sig_devices.advertisement_manager import (
-            AdvertisementManager,
-        )
+        import custom_components.bluetooth_sig_devices.support_detector as sd_mod
 
         detector = _make_detector()
         si = _make_service_info(
@@ -398,9 +396,7 @@ class TestCheckManufacturerSupportInterpreted:
         mock_ad.interpreted_data = MagicMock()  # Not None
         mock_ad.interpreter_name = "AppleInterpreter"
 
-        with mock_patch.object(
-            AdvertisementManager, "convert_advertisement", return_value=mock_ad
-        ):
+        with mock_patch.object(sd_mod, "_convert_advertisement", return_value=mock_ad):
             result = detector.check_manufacturer_support(si)
 
         assert result == "AppleInterpreter"
@@ -409,9 +405,7 @@ class TestCheckManufacturerSupportInterpreted:
         """Returns 'Manufacturer Data' when interpreter_name is None."""
         from unittest.mock import patch as mock_patch
 
-        from custom_components.bluetooth_sig_devices.advertisement_manager import (
-            AdvertisementManager,
-        )
+        import custom_components.bluetooth_sig_devices.support_detector as sd_mod
 
         detector = _make_detector()
         si = _make_service_info(
@@ -422,9 +416,7 @@ class TestCheckManufacturerSupportInterpreted:
         mock_ad.interpreted_data = MagicMock()  # Not None
         mock_ad.interpreter_name = None
 
-        with mock_patch.object(
-            AdvertisementManager, "convert_advertisement", return_value=mock_ad
-        ):
+        with mock_patch.object(sd_mod, "_convert_advertisement", return_value=mock_ad):
             result = detector.check_manufacturer_support(si)
 
         assert result == "Manufacturer Data"
@@ -433,9 +425,7 @@ class TestCheckManufacturerSupportInterpreted:
         """Returns None when convert_advertisement raises."""
         from unittest.mock import patch as mock_patch
 
-        from custom_components.bluetooth_sig_devices.advertisement_manager import (
-            AdvertisementManager,
-        )
+        import custom_components.bluetooth_sig_devices.support_detector as sd_mod
 
         detector = _make_detector()
         si = _make_service_info(
@@ -443,8 +433,8 @@ class TestCheckManufacturerSupportInterpreted:
         )
 
         with mock_patch.object(
-            AdvertisementManager,
-            "convert_advertisement",
+            sd_mod,
+            "_convert_advertisement",
             side_effect=RuntimeError("parse failed"),
         ):
             result = detector.check_manufacturer_support(si)
@@ -455,9 +445,7 @@ class TestCheckManufacturerSupportInterpreted:
         """Pre-supplied advertisement is reused (no conversion call)."""
         from unittest.mock import patch as mock_patch
 
-        from custom_components.bluetooth_sig_devices.advertisement_manager import (
-            AdvertisementManager,
-        )
+        import custom_components.bluetooth_sig_devices.support_detector as sd_mod
 
         detector = _make_detector()
         si = _make_service_info(
@@ -468,9 +456,7 @@ class TestCheckManufacturerSupportInterpreted:
         mock_ad.interpreted_data = MagicMock()
         mock_ad.interpreter_name = "PreConverted"
 
-        with mock_patch.object(
-            AdvertisementManager, "convert_advertisement"
-        ) as mock_convert:
+        with mock_patch.object(sd_mod, "_convert_advertisement") as mock_convert:
             result = detector.check_manufacturer_support(si, advertisement=mock_ad)
 
         # Should NOT call convert_advertisement since we passed the ad

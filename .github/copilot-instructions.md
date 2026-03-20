@@ -30,7 +30,7 @@ Home Assistant custom integration for automatic Bluetooth sensor creation using 
 
 ### Data Flow
 
-`__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `_ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `update_device()` → `_build_passive_bluetooth_update()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
+`__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `DiscoveryOrchestrator.ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `data_pipeline.update_device()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
 
 ### Two Independent Data Paths
 
@@ -48,12 +48,16 @@ Both paths are completely separate and independent. Each produces `PassiveBlueto
 | File | Responsibility |
 |------|----------------|
 | `__init__.py` | Dispatches hub vs device setup; creates coordinator; forwards to `PLATFORMS = [Platform.SENSOR]`; handles unload and device removal |
-| `coordinator.py` | Orchestrates BLE discovery, processor lifecycle, update pipeline; delegates to sub-managers |
-| `advertisement_manager.py` | `AdvertisementManager` — advertisement conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking state, RSSI, callbacks, manufacturer/model extraction |
+| `coordinator.py` | Orchestrates processor lifecycle and GATT poll closures; delegates discovery to `DiscoveryOrchestrator` and advertisement pipeline to `data_pipeline` |
+| `discovery_orchestrator.py` | `DiscoveryOrchestrator` — routes BLE devices to confirmed/unconfirmed paths; fires discovery flows; handles GATT probe success/failure callbacks |
+| `data_pipeline.py` | Stateless advertisement data pipeline: `update_device()` converts `BluetoothServiceInfoBleak` → `PassiveBluetoothDataUpdate`; creates `Device` on first sighting |
+| `advertisement_converter.py` | Stateless advertisement conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`); 3-tier parsing (raw PDU → manual → platform enrichment); manufacturer/model extraction |
+| `advertisement_manager.py` | `AdvertisementManager` — per-device advertisement tracking state, RSSI, callbacks; re-exports conversion functions from `advertisement_converter` |
 | `support_detector.py` | `SupportDetector` — determines if a BLE device has parseable SIG data; characteristic tracking and summary building |
 | `entity_builder.py` | Stateless entity construction from parsed bluetooth-sig library data; role gating; value coercion (`to_ha_state`) |
 | `entity_metadata.py` | Pure-function entity metadata resolution: unit→device class mapping, UUID normalisation, field unit lookup |
-| `gatt_manager.py` | `GATTManager` — GATT probing and on-demand characteristic reading; concurrency semaphore; no longer owns polling lifecycle |
+| `gatt_manager.py` | `GATTManager` — GATT probing, concurrency semaphore, probe scheduling and failure tracking; delegates characteristic reading to `gatt_poller` |
+| `gatt_poller.py` | GATT characteristic reading functions: `build_gatt_entities()`, `read_chars_connected()`, `poll_gatt_characteristics()`; shared by probe-time and poll-time paths |
 | `discovery_tracker.py` | `DiscoveryTracker` — seen/rejected/stale device tracking, LRU eviction, cleanup timer |
 | `device_adapter.py` | `HomeAssistantBluetoothAdapter` — `ClientManagerProtocol` impl; GATT connection lifecycle and I/O; delegates advertisement conversion to `AdvertisementManager` |
 | `device_validator.py` | BLE address classification (`classify_ble_address`, `is_static_address`); `GATTProbeResult` dataclass |
@@ -74,7 +78,7 @@ Both paths are completely separate and independent. Each produces `PassiveBlueto
 - **Entity metadata always from library:** `char_instance.name`, `.unit`, `data.parsed_value`, `spec.primary_field` — never hardcode
 - **GATT probe/poll:** `GATTManager.async_probe_device()` → `GATTProbeResult`; `async_probe_and_setup()` with semaphore; `async_poll_gatt_with_semaphore()` called by `ActiveBluetoothProcessorCoordinator`'s `poll_method` closure. Polling lifecycle owned by the framework, not `GATTManager`.
 - **Discovery tracking:** `DiscoveryTracker` manages seen/rejected/stale device sets with LRU eviction and periodic cleanup
-- **Advertisement management:** `AdvertisementManager` owns conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking, RSSI, callbacks; composed into `HomeAssistantBluetoothAdapter`; static helpers `get_manufacturer_name`/`get_model_name` used by coordinator
+- **Advertisement management:** `AdvertisementManager` owns per-device tracking, RSSI, callbacks; composed into `HomeAssistantBluetoothAdapter`; static helpers `get_manufacturer_name`/`get_model_name` used by coordinator
 - **Support detection:** `SupportDetector` consolidates checking service data, manufacturer data, and GATT probes; produces `DiscoveredCharacteristic` lists and summaries; composed into coordinator
 - **Registry pre-warming:** `prewarm_registries()` static method run in executor during setup
 - **No RSSI entities** — handled by other BLE monitor integrations

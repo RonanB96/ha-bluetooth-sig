@@ -61,13 +61,23 @@ rules:
   discovery:
     status: exempt
     comment: Devices are discovered via Bluetooth advertisements, not integration discovery.
-  docs-data-update: todo
-  docs-examples: todo
-  docs-known-limitations: todo
+  docs-data-update:
+    status: done
+    comment: Data update behaviour, entity availability, and staleness are documented in docs/explanation/data-paths.md.
+  docs-examples:
+    status: done
+    comment: Automation, dashboard, and statistics examples documented in docs/how-to/examples.md.
+  docs-known-limitations:
+    status: done
+    comment: Known limitations documented in docs/explanation/limitations.md (protocol coverage, read-only, rotating addresses, GATT probe limits).
   docs-supported-devices: done
-  docs-supported-functions: todo
+  docs-supported-functions:
+    status: done
+    comment: Supported functions table documented in docs/reference/index.md.
   docs-troubleshooting: done
-  docs-use-cases: todo
+  docs-use-cases:
+    status: done
+    comment: Use cases documented in docs/index.md (environmental monitoring, health, battery tracking, power monitoring).
   dynamic-devices: done
   entity-category: done
   entity-device-class: done
@@ -90,4 +100,6 @@ rules:
   inject-websession:
     status: exempt
     comment: This integration does not make HTTP requests.
-  strict-typing: todo
+  strict-typing:
+    status: done
+    comment: mypy strict mode is enforced in pyproject.toml and passes with 0 issues across all 14 source files.

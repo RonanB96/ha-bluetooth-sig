@@ -89,3 +89,25 @@ flowchart TD
 2. **Multi-field values** (e.g., Heart Rate Measurement with heart rate + energy expended) are expanded into one entity per field
 3. **Units and device classes** are assigned automatically based on the Bluetooth SIG specification
 4. **Entity visibility** depends on the characteristic's role — see [Characteristic Roles](roles.md) for details
+
+## Entity availability and staleness
+
+### Broadcast path
+
+Entities updated via broadcast data become **unavailable** if no advertisement is received from the device for approximately 15 minutes. This window is managed by Home Assistant's Bluetooth component, not by this integration directly.
+
+When a device comes back in range, it starts advertising again and entities return to **available** on the next received advertisement.
+
+### Connected path
+
+GATT-polled entities follow the same availability logic. If the device cannot be reached (out of range, busy, or the connection timed out), the poll is skipped and the entity retains its last known value. It becomes unavailable if the broadcast path also stops receiving advertisements within the 15-minute window.
+
+### Why values might not update
+
+| Condition                       | Effect                                                            |
+| ------------------------------- | ----------------------------------------------------------------- |
+| Device out of range             | Entity becomes unavailable after ~15 min                          |
+| Device broadcasts infrequently  | Values update slowly (normal)                                     |
+| GATT poll interval is long      | Values from connected reads update slowly (adjust in hub options) |
+| GATT connection failed          | Poll is skipped; next attempt at next poll interval               |
+| Characteristic not in broadcast | Value only updates during GATT polls                              |

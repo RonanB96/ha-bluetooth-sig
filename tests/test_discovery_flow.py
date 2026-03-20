@@ -273,7 +273,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -303,7 +303,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
             coordinator._ensure_device_processor(service_info)
@@ -333,7 +333,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -407,7 +407,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             # First discovery
             coordinator._ensure_device_processor(service_info)
@@ -447,7 +447,7 @@ class TestEndToEndGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ):
             coordinator._ensure_device_processor(service_info)
 

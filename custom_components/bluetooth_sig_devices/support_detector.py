@@ -23,7 +23,7 @@ from bluetooth_sig.types.data_types import CharacteristicInfo
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
-from .advertisement_manager import AdvertisementManager
+from .advertisement_converter import convert_advertisement as _convert_advertisement
 from .const import BLEAddress, CharacteristicSource, DiscoveredCharacteristic
 
 if TYPE_CHECKING:
@@ -98,7 +98,7 @@ class SupportDetector:
             return None
         try:
             if advertisement is None:
-                advertisement = AdvertisementManager.convert_advertisement(service_info)
+                advertisement = _convert_advertisement(service_info)
             if advertisement.interpreted_data is not None:
                 _LOGGER.debug(
                     "Device %s has interpreted manufacturer data: %s",

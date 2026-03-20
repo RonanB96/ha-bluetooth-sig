@@ -379,9 +379,7 @@ async def test_health_monitor_gatt_probe_body_sensor_location(
 
     # Look for body_sensor_location entity in registry
     bsl_entries = [
-        e
-        for e in all_entries
-        if "body_sensor" in e.entity_id or "2a38" in e.entity_id
+        e for e in all_entries if "body_sensor" in e.entity_id or "2a38" in e.entity_id
     ]
 
     assert bsl_entries, (

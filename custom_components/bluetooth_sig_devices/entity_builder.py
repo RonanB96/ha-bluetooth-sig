@@ -59,7 +59,8 @@ DIAGNOSTIC_ROLES: frozenset[CharacteristicRole] = frozenset(
 # Value coercion — delegate to bluetooth_sig.to_primitive()
 # ---------------------------------------------------------------------------
 
-# Re-export for backward compatibility with tests and internal callers.
+# Domain alias — expresses intent ("HA-compatible state value") at the
+# integration boundary while delegating to the library's ``to_primitive``.
 to_ha_state = to_primitive
 
 
@@ -509,7 +510,7 @@ def add_service_data_entities(
                 "Service data %s contains special sentinel value, skipping",
                 service_uuid,
             )
-        except Exception:
+        except (ValueError, TypeError, KeyError, AttributeError):
             _LOGGER.warning(
                 "Could not parse service data for %s",
                 service_uuid,

@@ -13,6 +13,10 @@ Task-oriented guides for common operations with the Bluetooth SIG Devices integr
 - [Remove a device](remove-device.md) — remove a confirmed device and its entities
 - [Remove the integration](remove-integration.md) — completely uninstall the integration
 
+## Usage
+
+- [Examples](examples.md) — automation, dashboard, and statistics examples using Bluetooth SIG sensor entities
+
 ## Troubleshooting
 
 - [Device not discovered](troubleshooting.md#device-not-discovered) — common reasons a device might not appear

@@ -19,6 +19,10 @@ from bluetooth_sig.types.advertising import (
 )
 from bluetooth_sig.types.company import ManufacturerData
 
+from custom_components.bluetooth_sig_devices.advertisement_converter import (
+    get_manufacturer_name,
+    get_model_name,
+)
 from custom_components.bluetooth_sig_devices.advertisement_manager import (
     AdvertisementManager,
 )
@@ -343,26 +347,26 @@ class TestGetLatestAdvertisement:
 
 
 class TestGetManufacturerName:
-    """Tests for AdvertisementManager.get_manufacturer_name."""
+    """Tests for get_manufacturer_name."""
 
     def test_returns_company_name(self) -> None:
         """Returns the company name from manufacturer data."""
         mfr = ManufacturerData.from_id_and_payload(0x004C, b"\x01\x02")
         ad = _make_advertisement(manufacturer_data={0x004C: mfr})
-        name = AdvertisementManager.get_manufacturer_name(ad)
+        name = get_manufacturer_name(ad)
         assert name is not None
         assert not name.startswith("Unknown")
 
     def test_returns_interpreter_name_when_no_mfr_data(self) -> None:
         """Falls back to interpreter_name when no manufacturer data."""
         ad = _make_advertisement(interpreter_name="TestInterpreter")
-        name = AdvertisementManager.get_manufacturer_name(ad)
+        name = get_manufacturer_name(ad)
         assert name == "TestInterpreter"
 
     def test_returns_none_when_nothing(self) -> None:
         """Returns None when no manufacturer data or interpreter."""
         ad = _make_advertisement()
-        name = AdvertisementManager.get_manufacturer_name(ad)
+        name = get_manufacturer_name(ad)
         assert name is None
 
     def test_skips_unknown_company_name(self) -> None:
@@ -371,21 +375,21 @@ class TestGetManufacturerName:
         mfr.company = MagicMock()
         mfr.company.name = "Unknown Company"
         ad = _make_advertisement(manufacturer_data={0xFFFF: mfr})
-        name = AdvertisementManager.get_manufacturer_name(ad)
+        name = get_manufacturer_name(ad)
         assert name is None
 
 
 class TestGetModelName:
-    """Tests for AdvertisementManager.get_model_name."""
+    """Tests for get_model_name."""
 
     def test_returns_local_name(self) -> None:
         """Returns local_name from advertisement."""
         ad = _make_advertisement(local_name="Test Device")
-        name = AdvertisementManager.get_model_name(ad)
+        name = get_model_name(ad)
         assert name == "Test Device"
 
     def test_returns_none_when_no_name(self) -> None:
         """Returns None when no local_name."""
         ad = _make_advertisement(local_name="")
-        name = AdvertisementManager.get_model_name(ad)
+        name = get_model_name(ad)
         assert name is None

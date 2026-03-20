@@ -127,8 +127,7 @@ class DiscoveryTracker:
             self.rejected_devices.discard(addr)
             self.rejection_reasons.pop(addr, None)
             self.last_seen_time.pop(addr, None)
-            # Also clean probe failure counts from the GATT manager
-            self._coordinator.gatt_manager.probe_failures.pop(addr, None)
+            self._coordinator.cleanup_cached_device(addr)
         _LOGGER.debug(
             "Evicted %d oldest addresses from tracking sets (seen=%d)",
             evict_count,
@@ -143,7 +142,8 @@ class DiscoveryTracker:
     def async_cleanup_stale_devices(self, _now: object = None) -> None:
         """Periodically remove stale entries from unbounded tracking sets.
 
-        Addresses that have not been seen for ``DEFAULT_STALE_DEVICE_TIMEOUT``
+        Addresses that have not been seen for the configured stale-device
+        timeout
         are removed from all tracking sets and the coordinator's device cache.
         Addresses with active processor coordinators or config entries are
         never evicted.
@@ -163,16 +163,13 @@ class DiscoveryTracker:
         if not stale_addresses:
             return
 
-        gatt = coord.gatt_manager
         for addr in stale_addresses:
             self.seen_devices.discard(addr)
             self.discovery_triggered.discard(addr)
             self.rejected_devices.discard(addr)
             self.rejection_reasons.pop(addr, None)
             self.last_seen_time.pop(addr, None)
-            gatt.probe_failures.pop(addr, None)
-            gatt.probe_results.pop(addr, None)
-            coord.devices.pop(addr, None)
+            coord.cleanup_cached_device(addr)
 
         # Cap rejected_devices if it grew beyond the limit
         if len(self.rejected_devices) > MAX_REJECTED_DEVICES:

@@ -57,6 +57,10 @@ DEFAULT_STALE_DEVICE_TIMEOUT = 3600
 MAX_PROBE_FAILURES = 3
 MAX_CONCURRENT_PROBES = 2
 
+# Minimum backoff (seconds) between GATT re-probe attempts for confirmed devices.
+# Prevents rapid retry loops when a previously-added device is temporarily out of range.
+CONFIRMED_DEVICE_PROBE_BACKOFF = DEFAULT_POLL_INTERVAL_SECONDS
+
 # Services that should NOT count as "parseable SIG data"
 # These are standard BLE services that any BLE monitor can expose
 # The actual UUIDs are retrieved from the bluetooth-sig library at runtime

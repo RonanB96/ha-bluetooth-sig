@@ -11,6 +11,19 @@ No hardcoded device maps — all parsing is driven by the [bluetooth-sig-python]
 - Creates sensor entities with correct units, device classes, and state classes — all resolved from official GATT specifications
 - Combines passive advertisement monitoring with active GATT characteristic polling for maximum data coverage
 
+## Use cases
+
+This integration is useful whenever you have Bluetooth devices that speak the standard language of BLE sensors:
+
+- **Environmental monitoring** — temperature, humidity, air quality (CO₂, VOC, particulate matter), pressure, and illuminance sensors that use standard SIG environmental sensing service data
+- **Health and fitness** — heart rate monitors, blood pressure cuffs, glucose meters, and body composition scales that implement Bluetooth SIG health profiles
+- **Battery tracking** — any Bluetooth device that exposes the standard Battery Level characteristic (very common across all device types)
+- **Power monitoring** — smart plugs, energy meters, and lighting controllers that expose IEC-standard power and energy characteristics
+- **Weather stations** — BLE weather sensors exposing wind speed, rainfall, and UV index via standard environmental sensing profiles
+- **Industrial and lab sensors** — any device implementing standard BLE measurement profiles for physical quantities
+
+If your device follows the official Bluetooth SIG specifications rather than a proprietary format, this integration handles it automatically — with no configuration, no hardcoded device lists, and no updates needed when new characteristics are added to the library.
+
 ## How it works
 
 This integration is built on two components that work together:
@@ -51,4 +64,4 @@ This documentation follows the [Diátaxis](https://diataxis.fr/) framework:
 | **[Getting Started](tutorials/getting-started.md)** | Step-by-step tutorial to install and set up the integration |
 | **[How-to Guides](how-to/index.md)** | Task-oriented guides for common operations |
 | **[Reference](reference/index.md)** | Technical details — entities, configuration, supported characteristics |
-| **[Explanation](explanation/index.md)** | Background concepts — how discovery works, data paths, architecture |
+| **[Explanation](explanation/index.md)** | Background concepts — how discovery works, data paths, architecture, limitations |
