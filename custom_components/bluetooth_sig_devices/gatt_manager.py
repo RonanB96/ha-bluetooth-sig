@@ -195,8 +195,20 @@ class GATTManager:
             parseable_count = 0
 
             for service in services:
-                service_uuid = BluetoothUUID(service.uuid)
-                if service_uuid.short_form.upper() in excluded_svc:
+                try:
+                    service_uuid = BluetoothUUID(service.uuid)
+                    service_short_form = service_uuid.short_form.upper()
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Device %s: skipping service with invalid UUID %r: %s",
+                        address,
+                        getattr(service, "uuid", None),
+                        err,
+                        exc_info=True,
+                    )
+                    continue
+
+                if service_short_form in excluded_svc:
                     _LOGGER.debug(
                         "Device %s: skipping excluded service %s",
                         address,
@@ -204,10 +216,32 @@ class GATTManager:
                     )
                     continue
 
-                for char_uuid_str, char_instance in service.characteristics.items():
-                    char_uuid = BluetoothUUID(char_uuid_str)
+                characteristics = getattr(service, "characteristics", None)
+                if not isinstance(characteristics, dict):
+                    _LOGGER.debug(
+                        "Device %s: skipping service %s with non-mapping characteristics: %r",
+                        address,
+                        service_uuid.short_form,
+                        type(characteristics),
+                    )
+                    continue
 
-                    if char_uuid.short_form.upper() in excluded_char:
+                for char_uuid_str, char_instance in characteristics.items():
+                    try:
+                        char_uuid = BluetoothUUID(char_uuid_str)
+                        char_short_form = char_uuid.short_form.upper()
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "Device %s: skipping characteristic with invalid UUID %r in service %s: %s",
+                            address,
+                            char_uuid_str,
+                            service_uuid.short_form,
+                            err,
+                            exc_info=True,
+                        )
+                        continue
+
+                    if char_short_form in excluded_char:
                         _LOGGER.debug(
                             "Device %s: skipping excluded characteristic %s",
                             address,
