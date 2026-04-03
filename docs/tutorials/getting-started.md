@@ -45,7 +45,7 @@ This creates the **hub entry** — a single integration instance that scans for 
 
 ## Step 3: Discover and confirm devices
 
-Once the hub is running, the integration listens for Bluetooth advertisements. When it detects a device broadcasting parseable SIG data:
+Once the hub is running, the integration listens for Bluetooth advertisements. When it detects a compatible device:
 
 1. A **discovery notification** appears under **Settings → Devices & Services → Discovered**
 2. The notification shows the device name and which characteristics were detected
@@ -73,7 +73,7 @@ For example, a heart rate monitor might create:
 ## What happens next
 
 - **Passive updates:** Sensor values update automatically each time the device broadcasts an advertisement — no polling needed.
-- **Active polling (connectable devices):** If the integration detects GATT-readable characteristics during device probing, it will also periodically connect and read those values. The default poll interval is 5 minutes.
+- **Active polling (connectable devices):** If the integration detects readable data during device probing, it will also periodically connect to the device and read those values (known as GATT polling). The default poll interval is 5 minutes.
 - **New devices:** The integration continues scanning in the background. New compatible devices will appear in the Discovered section as they are detected.
 
 ## Next steps

@@ -8,7 +8,6 @@ on coordinator or Home Assistant state.
 
 from __future__ import annotations
 
-from bluetooth_sig.registry.uuids.units import UnitsRegistry
 from bluetooth_sig.types.registry.common import CharacteristicSpec
 from homeassistant.components.sensor import SensorDeviceClass
 
@@ -100,9 +99,8 @@ def resolve_field_unit(
 ) -> str | None:
     """Resolve per-field unit from the GSS specification.
 
-    Looks up the ``FieldSpec`` matching *field_name* in the characteristic's
-    GSS ``structure`` list and converts its ``unit_id`` to a human-readable
-    symbol via the SIG units registry.
+    Uses ``FieldSpec.unit_symbol`` to retrieve the resolved SIG unit
+    symbol for the field matching *field_name*.
 
     Returns ``None`` when no per-field unit is available.
     """
@@ -111,15 +109,8 @@ def resolve_field_unit(
 
     for field_spec in spec.structure:
         if field_spec.python_name == field_name:
-            uid = field_spec.unit_id
-            if uid is None:
-                return None
-            full_id = f"org.bluetooth.unit.{uid}"
-            units_reg = UnitsRegistry.get_instance()
-            info = units_reg.get_info(full_id)
-            if info and info.symbol:
-                return info.symbol
-            return None
+            symbol = field_spec.unit_symbol
+            return symbol if symbol else None
 
     return None
 

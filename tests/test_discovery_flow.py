@@ -65,6 +65,8 @@ class TestIntegrationDiscoveryFlow:
                 "address": DEVICE_ADDRESS,
                 "name": DEVICE_NAME,
                 "characteristics": "Battery Level, Temperature",
+                "manufacturer": "",
+                "rssi": -65,
             },
         )
 
@@ -72,6 +74,9 @@ class TestIntegrationDiscoveryFlow:
         assert result["step_id"] == "integration_discovery_confirm"
         placeholders = result["description_placeholders"]
         assert placeholders["characteristics"] == "Battery Level, Temperature"
+        assert placeholders["manufacturer"] == ""
+        assert placeholders["address"] == DEVICE_ADDRESS
+        assert "-65 dBm" in placeholders["rssi"]
 
     async def test_discovery_without_characteristics_shows_fallback(
         self,
@@ -88,6 +93,75 @@ class TestIntegrationDiscoveryFlow:
         assert result["type"] == FlowResultType.FORM
         placeholders = result["description_placeholders"]
         assert "Unknown" in placeholders["characteristics"]
+        assert placeholders["manufacturer"] == ""
+        assert placeholders["address"] == DEVICE_ADDRESS
+        assert placeholders["rssi"] == ""
+
+    async def test_discovery_shows_manufacturer_placeholder(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When manufacturer is provided, a formatted placeholder appears."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "Acme Corp",
+                "rssi": -70,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert placeholders["manufacturer"] == "\nManufacturer: **Acme Corp**"
+
+    async def test_discovery_shows_rssi_placeholder(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When RSSI is provided, signal strength appears in the card."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "",
+                "rssi": -55,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert "-55 dBm" in placeholders["rssi"]
+
+    async def test_discovery_hides_rssi_when_none(
+        self,
+        hass: HomeAssistant,
+        mock_bluetooth_disabled: Generator[None],
+    ) -> None:
+        """When RSSI is None, the signal strength line is omitted."""
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN,
+            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
+            data={
+                "address": DEVICE_ADDRESS,
+                "name": DEVICE_NAME,
+                "characteristics": "Temperature",
+                "manufacturer": "",
+                "rssi": None,
+            },
+        )
+
+        assert result["type"] == FlowResultType.FORM
+        placeholders = result["description_placeholders"]
+        assert placeholders["rssi"] == ""
 
     async def test_discovery_confirm_creates_device_entry(
         self,
@@ -199,7 +273,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -229,7 +303,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
             coordinator._ensure_device_processor(service_info)
@@ -259,7 +333,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -333,7 +407,7 @@ class TestCoordinatorDiscoveryGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             # First discovery
             coordinator._ensure_device_processor(service_info)
@@ -373,7 +447,7 @@ class TestEndToEndGating:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ):
             coordinator._ensure_device_processor(service_info)
 

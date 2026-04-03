@@ -10,6 +10,7 @@ Bluetooth integration with the bluetooth-sig-python library for both:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -22,51 +23,24 @@ from bleak_retry_connector import (
     close_stale_connections_by_address,
     establish_connection,
 )
-from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
 from bluetooth_sig.device.client import ClientManagerProtocol
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
 from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
 from bluetooth_sig.gatt.services.base import BaseGattService
 from bluetooth_sig.gatt.services.registry import GattServiceRegistry
-from bluetooth_sig.types.advertising import (
-    AdvertisementData,
-    AdvertisingDataStructures,
-    BLEAdvertisingFlags,
-    CoreAdvertisingData,
-    DeviceProperties,
-    DirectedAdvertisingData,
-    LocationAndSensingData,
-    MeshAndBroadcastData,
-    OOBSecurityData,
-    SecurityData,
-)
-from bluetooth_sig.types.company import CompanyIdentifier, ManufacturerData
+from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo, ServiceInfo
 from bluetooth_sig.types.device_types import DeviceService, ScannedDevice
-from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.core import HomeAssistant
 
-from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT
+from .advertisement_converter import convert_advertisement as _convert_advertisement
+from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
-
-# Mapping from Bleak's lowercase property strings to GattProperty enum values
-_BLEAK_PROPERTY_MAP: dict[str, GattProperty] = {
-    "broadcast": GattProperty.BROADCAST,
-    "read": GattProperty.READ,
-    "write-without-response": GattProperty.WRITE_WITHOUT_RESPONSE,
-    "write": GattProperty.WRITE,
-    "notify": GattProperty.NOTIFY,
-    "indicate": GattProperty.INDICATE,
-    "authenticated-signed-writes": GattProperty.AUTHENTICATED_SIGNED_WRITES,
-    "extended-properties": GattProperty.EXTENDED_PROPERTIES,
-    "reliable-write": GattProperty.RELIABLE_WRITE,
-    "writable-auxiliaries": GattProperty.WRITABLE_AUXILIARIES,
-}
 
 
 class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
@@ -92,7 +66,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
     def __init__(
         self,
-        address: str,
+        address: BLEAddress,
         name: str = "",
         *,
         hass: HomeAssistant | None = None,
@@ -178,170 +152,23 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     def convert_advertisement(cls, advertisement: object) -> AdvertisementData:
         """Convert HA BluetoothServiceInfoBleak to bluetooth-sig AdvertisementData.
 
+        Delegates to ``advertisement_converter.convert_advertisement()``
+        which is the single source of truth for HA → library conversion.
+
         Args:
             advertisement: Home Assistant's Bluetooth service info
 
         Returns:
             AdvertisementData compatible with bluetooth-sig-python library
+
+        Raises:
+            TypeError: If *advertisement* is not a ``BluetoothServiceInfoBleak``.
+
         """
-        # Type narrowing for Home Assistant's BluetoothServiceInfoBleak
         if not isinstance(advertisement, BluetoothServiceInfoBleak):
             msg = f"Expected BluetoothServiceInfoBleak, got {type(advertisement)}"
             raise TypeError(msg)
-
-        service_info: BluetoothServiceInfoBleak = advertisement
-        # Extract manufacturer data - convert to ManufacturerData objects
-        manufacturer_data: dict[int, ManufacturerData] = {}
-        if service_info.manufacturer_data:
-            for company_id, payload in service_info.manufacturer_data.items():
-                manufacturer_data[company_id] = ManufacturerData(
-                    company=CompanyIdentifier(id=company_id, name="Unknown"),
-                    payload=payload,
-                )
-
-        # Extract service data - convert to BluetoothUUID keys
-        service_data: dict[BluetoothUUID, bytes] = {}
-        if service_info.service_data:
-            for uuid_str, data in service_info.service_data.items():
-                service_data[BluetoothUUID(uuid_str)] = data
-
-        # Extract service UUIDs
-        service_uuids = []
-        if service_info.service_uuids:
-            service_uuids = [BluetoothUUID(uuid) for uuid in service_info.service_uuids]
-
-        # Get local name
-        local_name = service_info.name or ""
-
-        # Get RSSI
-        rssi = service_info.rssi
-
-        # Create CoreAdvertisingData with the extracted information
-        core_data = CoreAdvertisingData(
-            manufacturer_data=manufacturer_data,
-            service_data=service_data,
-            service_uuids=service_uuids,
-            solicited_service_uuids=[],
-            local_name=local_name,
-            uri_data=None,
-        )
-
-        # Create other advertising data structures with defaults
-        properties = DeviceProperties(
-            flags=BLEAdvertisingFlags(0),
-            appearance=None,
-            tx_power=0,
-            le_role=None,
-            le_supported_features=None,
-            class_of_device=None,
-        )
-
-        # Create AdvertisingDataStructures
-        ad_structures = AdvertisingDataStructures(
-            core=core_data,
-            properties=properties,
-            directed=DirectedAdvertisingData(
-                public_target_address=[],
-                random_target_address=[],
-                le_bluetooth_device_address="",
-                advertising_interval=None,
-                advertising_interval_long=None,
-                peripheral_connection_interval_range=None,
-            ),
-            oob_security=OOBSecurityData(
-                simple_pairing_hash_c=b"",
-                simple_pairing_randomizer_r=b"",
-                secure_connections_confirmation=b"",
-                secure_connections_random=b"",
-                security_manager_tk_value=b"",
-                security_manager_oob_flags=b"",
-            ),
-            location=LocationAndSensingData(
-                indoor_positioning=None,
-                three_d_information=None,
-                transport_discovery_data=None,
-                channel_map_update_indication=None,
-            ),
-            mesh=MeshAndBroadcastData(
-                mesh_message=None,
-                secure_network_beacon=None,
-                unprovisioned_device_beacon=None,
-                provisioning_bearer=None,
-                broadcast_name="",
-                broadcast_code=b"",
-                biginfo=b"",
-                periodic_advertising_response_timing=b"",
-                electronic_shelf_label=b"",
-            ),
-            security=SecurityData(
-                encrypted_advertising_data=b"",
-                resolvable_set_identifier=b"",
-            ),
-        )
-
-        # Parse advertising data using bluetooth-sig interpreters
-        interpreted_data = None
-        interpreter_name = None
-
-        # Prepare data for parsing
-        mfr_data_for_parse: dict[int, bytes] = {}
-        if service_info.manufacturer_data:
-            for company_id, payload in service_info.manufacturer_data.items():
-                mfr_data_for_parse[company_id] = payload
-                _LOGGER.debug(
-                    "Device %s has manufacturer data company ID: 0x%04X with %d bytes",
-                    service_info.address,
-                    company_id,
-                    len(payload),
-                )
-
-        svc_data_for_parse: dict[BluetoothUUID, bytes] = {}
-        if service_info.service_data:
-            for uuid_str, data in service_info.service_data.items():
-                svc_data_for_parse[BluetoothUUID(uuid_str)] = data
-                _LOGGER.debug(
-                    "Device %s has service data UUID: %s with %d bytes",
-                    service_info.address,
-                    uuid_str,
-                    len(data),
-                )
-
-        # Try to parse with the library's interpreters
-        if mfr_data_for_parse or svc_data_for_parse:
-            try:
-                context = PayloadContext(
-                    mac_address=service_info.address,
-                    rssi=rssi or 0,
-                )
-                parsed_results = parse_advertising_payloads(
-                    manufacturer_data=mfr_data_for_parse,
-                    service_data=svc_data_for_parse,
-                    context=context,
-                )
-                if parsed_results:
-                    # Use the first parsed result
-                    interpreted_data = parsed_results[0]
-                    interpreter_name = type(interpreted_data).__name__
-                    _LOGGER.debug(
-                        "Parsed advertising data for %s: %s from %s",
-                        service_info.address,
-                        interpreted_data,
-                        interpreter_name,
-                    )
-            except Exception as e:
-                _LOGGER.debug(
-                    "Failed to parse advertising data for %s: %s",
-                    service_info.address,
-                    e,
-                )
-
-        # Create and return AdvertisementData
-        return AdvertisementData(
-            ad_structures=ad_structures,
-            interpreted_data=interpreted_data,
-            interpreter_name=interpreter_name,
-            rssi=rssi,
-        )
+        return _convert_advertisement(advertisement)
 
     async def get_latest_advertisement(
         self, refresh: bool = False
@@ -392,7 +219,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
     def on_advertisement_received(self, advertisement: AdvertisementData) -> None:
         """Handle receiving an advertisement."""
         self._latest_advertisement = advertisement
-        for callback in self._advertisement_callbacks:
+        for callback in list(self._advertisement_callbacks):
             callback(advertisement)
 
     def register_advertisement_callback(
@@ -481,13 +308,6 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             )
             self._is_connected = True
             self._mtu_size = self._client.mtu_size
-            # Try to acquire MTU to avoid warnings
-            if hasattr(self._client, "_acquire_mtu"):
-                try:
-                    await self._client._acquire_mtu()
-                    self._mtu_size = self._client.mtu_size
-                except Exception:
-                    pass  # Ignore MTU acquisition failures
             self._cached_services = None  # Clear cache on new connection
             _LOGGER.debug(
                 "Connected to %s (MTU: %d)",
@@ -495,7 +315,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 self._mtu_size,
             )
         except BleakError as err:
-            _LOGGER.debug("Failed to connect to %s: %s", self._address, err)
+            _LOGGER.warning("Failed to connect to %s: %s", self._address, err)
             self._is_connected = False
             self._client = None
             raise
@@ -505,10 +325,14 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
         if self._client:
             try:
                 if self._client.is_connected:
+                    # Stop active notifications before clearing callbacks
+                    for uuid_str in list(self._notification_callbacks):
+                        with contextlib.suppress(Exception):
+                            await self._client.stop_notify(uuid_str)
                     await self._client.disconnect()
                     _LOGGER.debug("Disconnected from %s", self._address)
             except BleakError as err:
-                _LOGGER.debug("Error disconnecting from %s: %s", self._address, err)
+                _LOGGER.warning("Error disconnecting from %s: %s", self._address, err)
             finally:
                 self._client = None
                 self._is_connected = False
@@ -543,11 +367,13 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
             # Get service class from registry or create a base service
             # Run in executor to avoid blocking I/O in event loop
-            service_class = await asyncio.get_event_loop().run_in_executor(
+            service_class: (
+                type[BaseGattService] | None
+            ) = await asyncio.get_running_loop().run_in_executor(
                 None, GattServiceRegistry.get_service_class_by_uuid, service_uuid
             )
             if service_class:
-                service_instance = service_class()
+                service_instance: BaseGattService = service_class()
             else:
                 # Create a generic service for unknown UUIDs
                 service_info = ServiceInfo(
@@ -562,45 +388,24 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 char_uuid = BluetoothUUID(bleak_char.uuid)
                 char_uuid_str = str(char_uuid)
 
-                # Convert Bleak properties to GattProperty enum
-                properties: list[GattProperty] = []
-                for prop in bleak_char.properties:
-                    mapped = _BLEAK_PROPERTY_MAP.get(prop)
-                    if mapped is not None:
-                        properties.append(mapped)
-                    else:
-                        _LOGGER.warning("Unmapped Bleak GATT property: %s", prop)
-
                 # Get characteristic class from registry
                 # Run in executor to avoid blocking I/O in event loop
-                char_class = await asyncio.get_event_loop().run_in_executor(
+                char_class: (
+                    type[BaseCharacteristic[Any]] | None
+                ) = await asyncio.get_running_loop().run_in_executor(
                     None,
                     CharacteristicRegistry.get_characteristic_class_by_uuid,
                     char_uuid,
                 )
                 if char_class:
-                    # Create characteristic instance with runtime properties from device.
-                    # Some library characteristic classes (e.g. CurrentTimeCharacteristic)
-                    # do not accept 'properties' — fall back to no-arg construction.
-                    try:
-                        char_instance = char_class(properties=properties)
-                    except TypeError:
-                        _LOGGER.debug(
-                            "Characteristic %s does not accept properties kwarg, "
-                            "using no-arg construction",
-                            char_uuid.short_form,
-                        )
-                        char_instance = char_class()
+                    char_instance: BaseCharacteristic[Any] = char_class()
                 else:
                     # Fallback: Create UnknownCharacteristic for unrecognized UUIDs
                     char_info = CharacteristicInfo(
                         uuid=char_uuid,
-                        name=bleak_char.description
-                        or f"Unknown Characteristic ({char_uuid.short_form})",
+                        name=bleak_char.description or "",
                     )
-                    char_instance = UnknownCharacteristic(
-                        info=char_info, properties=properties
-                    )
+                    char_instance = UnknownCharacteristic(info=char_info)
 
                 characteristics[char_uuid_str] = char_instance
 
@@ -679,6 +484,26 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             self._address,
         )
 
+    def _find_descriptor_handle(self, desc_uuid: BluetoothUUID) -> int:
+        """Find a descriptor handle by UUID.
+
+        Raises:
+            RuntimeError: If not connected.
+            ValueError: If descriptor not found.
+
+        """
+        if not self._client or not self._client.is_connected:
+            raise RuntimeError("Not connected to device")
+
+        desc_uuid_str = str(desc_uuid).lower()
+        for service in self._client.services:
+            for char in service.characteristics:
+                for desc in char.descriptors:
+                    if desc.uuid.lower() == desc_uuid_str:
+                        return desc.handle
+
+        raise ValueError(f"Descriptor {desc_uuid} not found")
+
     async def read_gatt_descriptor(self, desc_uuid: BluetoothUUID) -> bytes:
         """Read a GATT descriptor.
 
@@ -693,19 +518,9 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             ValueError: If descriptor not found
 
         """
-        if not self._client or not self._client.is_connected:
-            raise RuntimeError("Not connected to device")
-
-        # Find descriptor by UUID
-        desc_uuid_str = str(desc_uuid).lower()
-        for service in self._client.services:
-            for char in service.characteristics:
-                for desc in char.descriptors:
-                    if desc.uuid.lower() == desc_uuid_str:
-                        data = await self._client.read_gatt_descriptor(desc.handle)
-                        return bytes(data)
-
-        raise ValueError(f"Descriptor {desc_uuid} not found")
+        handle = self._find_descriptor_handle(desc_uuid)
+        data = await self._client.read_gatt_descriptor(handle)  # type: ignore[union-attr]
+        return bytes(data)
 
     async def write_gatt_descriptor(
         self, desc_uuid: BluetoothUUID, data: bytes
@@ -721,19 +536,8 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             ValueError: If descriptor not found
 
         """
-        if not self._client or not self._client.is_connected:
-            raise RuntimeError("Not connected to device")
-
-        # Find descriptor by UUID
-        desc_uuid_str = str(desc_uuid).lower()
-        for service in self._client.services:
-            for char in service.characteristics:
-                for desc in char.descriptors:
-                    if desc.uuid.lower() == desc_uuid_str:
-                        await self._client.write_gatt_descriptor(desc.handle, data)
-                        return
-
-        raise ValueError(f"Descriptor {desc_uuid} not found")
+        handle = self._find_descriptor_handle(desc_uuid)
+        await self._client.write_gatt_descriptor(handle, data)  # type: ignore[union-attr]
 
     async def start_notify(
         self, char_uuid: BluetoothUUID, callback: Callable[[str, bytes], None]

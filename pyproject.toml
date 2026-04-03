@@ -4,11 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ha-bluetooth-sig"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Home Assistant integration for Bluetooth SIG devices"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["bluetooth-sig>=0.2.0"]
+dependencies = ["bluetooth-sig~=0.4"]
+
+[tool.hatch.version]
+source = "vcs"
 
 [project.optional-dependencies]
 test = ["pytest-homeassistant-custom-component", "pyserial", "aiousbwatcher", "pyudev"]

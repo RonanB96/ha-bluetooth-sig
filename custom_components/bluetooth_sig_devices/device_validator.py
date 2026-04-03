@@ -7,17 +7,26 @@ and the ``GATTProbeResult`` data container used by the GATT manager.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from bluetooth_sig.types.uuid import BluetoothUUID
 
-from .const import STATIC_ADDRESS_TYPES, BLEAddressType
+from .const import STATIC_ADDRESS_TYPES, BLEAddress, BLEAddressType
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
 _LOGGER = logging.getLogger(__name__)
+
+# Address types that indicate ephemeral (rotating) addresses.
+# Used as a fallback heuristic when no BlueZ/ESPHome metadata is available.
+_EPHEMERAL_ADDRESS_TYPES: frozenset[BLEAddressType] = frozenset(
+    {
+        BLEAddressType.RESOLVABLE_PRIVATE,
+        BLEAddressType.NON_RESOLVABLE_PRIVATE,
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +34,7 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _classify_random_address(address: str) -> BLEAddressType:
+def _classify_random_address(address: BLEAddress) -> BLEAddressType:
     """Classify a random BLE address sub-type from the first octet.
 
     Per the Bluetooth Core Spec (Vol 6, Part B, §1.3) the two
@@ -73,8 +82,13 @@ def classify_ble_address(
     the first MAC octet determine the sub-type per the Bluetooth Core Spec
     (Vol 6, Part B, §1.3).
 
-    When neither metadata format is present (e.g. test mocks) the function
-    returns ``UNKNOWN`` which is treated as stable by callers.
+    When neither metadata format is present, a **MAC heuristic** is applied:
+    the first octet is checked against the Bluetooth Core Spec random-address
+    ranges.  Addresses whose first byte falls in the RPA (0x40–0x7F) or NRPA
+    (0x00–0x3F) range are classified as ephemeral — preventing wasted GATT
+    probes and spurious discovery flows on rotating addresses.  Addresses in
+    the Random Static (0xC0–0xFF) or reserved (0x80–0xBF) range return
+    ``UNKNOWN`` (treated as stable).
     """
     device = service_info.device
 
@@ -102,7 +116,20 @@ def classify_ble_address(
                 return BLEAddressType.PUBLIC
 
     if not is_random:
-        # No metadata (mock, unknown backend) — conservatively assume stable.
+        # No metadata available — apply MAC-based heuristic as a fallback.
+        # Per BT Core Spec §1.3, addresses in the RPA (0x40–0x7F) and NRPA
+        # (0x00–0x3F) ranges are overwhelmingly ephemeral in practice.  Treat
+        # them as such to avoid wasted GATT probes and spurious discovery
+        # flows. Random Static and reserved ranges stay UNKNOWN (stable).
+        heuristic = _classify_random_address(service_info.address)
+        if heuristic in _EPHEMERAL_ADDRESS_TYPES:
+            _LOGGER.debug(
+                "No BLE address metadata for %s — MAC heuristic classifies "
+                "as %s (ephemeral, will be filtered)",
+                service_info.address,
+                heuristic.value,
+            )
+            return heuristic
         return BLEAddressType.UNKNOWN
 
     # Random address — classify sub-type from the first octet.
@@ -113,8 +140,10 @@ def is_static_address(service_info: BluetoothServiceInfoBleak) -> bool:
     """Return True if the device has a static (trackable) BLE address.
 
     Static addresses include Public, Random Static, and Unknown (when
-    BlueZ metadata is not available we assume the address is stable).
-    Resolvable Private and Non-Resolvable Private addresses are rejected.
+    BlueZ metadata is not available and the MAC heuristic does not
+    indicate an ephemeral range).  Resolvable Private and
+    Non-Resolvable Private addresses — whether confirmed by metadata
+    or inferred by MAC heuristic — are rejected.
     """
     return classify_ble_address(service_info) in STATIC_ADDRESS_TYPES
 
@@ -127,10 +156,11 @@ class GATTProbeResult:
     what characteristics a device supports.
     """
 
-    address: str
+    address: BLEAddress
     name: str | None = None
     parseable_count: int = 0
-    supported_char_uuids: list[BluetoothUUID] = field(default_factory=list)
+    supported_char_uuids: tuple[BluetoothUUID, ...] = ()
+    manufacturer_name: str | None = None
 
     def has_support(self) -> bool:
         """Check if device has any parseable characteristics."""

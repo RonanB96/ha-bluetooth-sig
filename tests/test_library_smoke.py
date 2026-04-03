@@ -8,6 +8,7 @@ code, and exist purely to catch upstream breakage early.
 from __future__ import annotations
 
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.types.gatt_enums import CharacteristicRole
 
 
 class TestCharacteristicRegistry:
@@ -50,10 +51,13 @@ class TestCharacteristicRegistry:
 
         instance = char_class()
         assert instance.name == "Heart Rate Measurement"
-        assert instance.unit == "beats per minute"
-        # Heart Rate Measurement has a struct python_type (not a simple primitive)
-        assert instance.python_type is not None
+        # Multi-field structs have no top-level unit; units are per-field
+        assert instance.unit == ""
+        # Multi-field structs should not have a scalar python_type from the registry
+        # (the concrete class provides the real struct type via _characteristic_type)
         assert instance.python_type not in (int, float, str, bool)
+        # Role must still be MEASUREMENT (name contains 'Measurement')
+        assert instance.role == CharacteristicRole.MEASUREMENT
 
     def test_unknown_uuid_returns_none(self) -> None:
         """Test that unknown UUID returns None from registry."""

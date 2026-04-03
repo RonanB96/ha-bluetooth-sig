@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Coroutine, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -241,11 +241,20 @@ def mock_bluetooth_setup() -> Generator[None]:
         yield
 
 
+def _closing_create_task(
+    coro: Coroutine[Any, Any, Any], *args: Any, **kwargs: Any
+) -> MagicMock:
+    """Close the coroutine so it doesn't trigger 'never awaited' warnings."""
+    coro.close()
+    return MagicMock()
+
+
 @pytest.fixture
 def mock_hass() -> MagicMock:
     """Return a mock Home Assistant instance."""
     hass = MagicMock(spec=HomeAssistant)
     hass.data = {}
+    hass.async_create_task = MagicMock(side_effect=_closing_create_task)
     return hass
 
 

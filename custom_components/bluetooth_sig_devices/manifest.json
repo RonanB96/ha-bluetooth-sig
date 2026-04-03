@@ -11,12 +11,12 @@
   "dependencies": [
     "bluetooth"
   ],
-  "documentation": "https://ronanb96.github.io/bluetooth-sig-python/",
+  "documentation": "https://github.com/RonanB96/ha-bluetooth-sig",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/RonanB96/ha-bluetooth-sig/issues",
   "requirements": [
     "bleak-retry-connector>=3.0.0",
-    "bluetooth-sig>=0.2.0"
+    "bluetooth-sig>=0.4"
   ],
   "version": "0.1.0"
 }

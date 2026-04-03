@@ -30,7 +30,7 @@ Home Assistant custom integration for automatic Bluetooth sensor creation using 
 
 ### Data Flow
 
-`__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `_ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `update_device()` → `_build_passive_bluetooth_update()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
+`__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `DiscoveryOrchestrator.ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `data_pipeline.update_device()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
 
 ### Two Independent Data Paths
 
@@ -48,12 +48,16 @@ Both paths are completely separate and independent. Each produces `PassiveBlueto
 | File | Responsibility |
 |------|----------------|
 | `__init__.py` | Dispatches hub vs device setup; creates coordinator; forwards to `PLATFORMS = [Platform.SENSOR]`; handles unload and device removal |
-| `coordinator.py` | Orchestrates BLE discovery, processor lifecycle, update pipeline; delegates to sub-managers |
-| `advertisement_manager.py` | `AdvertisementManager` — advertisement conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking state, RSSI, callbacks, manufacturer/model extraction |
+| `coordinator.py` | Orchestrates processor lifecycle and GATT poll closures; delegates discovery to `DiscoveryOrchestrator` and advertisement pipeline to `data_pipeline` |
+| `discovery_orchestrator.py` | `DiscoveryOrchestrator` — routes BLE devices to confirmed/unconfirmed paths; fires discovery flows; handles GATT probe success/failure callbacks |
+| `data_pipeline.py` | Stateless advertisement data pipeline: `update_device()` converts `BluetoothServiceInfoBleak` → `PassiveBluetoothDataUpdate`; creates `Device` on first sighting |
+| `advertisement_converter.py` | Stateless advertisement conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`); 3-tier parsing (raw PDU → manual → platform enrichment); manufacturer/model extraction |
+| `advertisement_manager.py` | `AdvertisementManager` — per-device advertisement tracking state, RSSI, callbacks; re-exports conversion functions from `advertisement_converter` |
 | `support_detector.py` | `SupportDetector` — determines if a BLE device has parseable SIG data; characteristic tracking and summary building |
 | `entity_builder.py` | Stateless entity construction from parsed bluetooth-sig library data; role gating; value coercion (`to_ha_state`) |
 | `entity_metadata.py` | Pure-function entity metadata resolution: unit→device class mapping, UUID normalisation, field unit lookup |
-| `gatt_manager.py` | `GATTManager` — GATT probing and on-demand characteristic reading; concurrency semaphore; no longer owns polling lifecycle |
+| `gatt_manager.py` | `GATTManager` — GATT probing, concurrency semaphore, probe scheduling and failure tracking; delegates characteristic reading to `gatt_poller` |
+| `gatt_poller.py` | GATT characteristic reading functions: `build_gatt_entities()`, `read_chars_connected()`, `poll_gatt_characteristics()`; shared by probe-time and poll-time paths |
 | `discovery_tracker.py` | `DiscoveryTracker` — seen/rejected/stale device tracking, LRU eviction, cleanup timer |
 | `device_adapter.py` | `HomeAssistantBluetoothAdapter` — `ClientManagerProtocol` impl; GATT connection lifecycle and I/O; delegates advertisement conversion to `AdvertisementManager` |
 | `device_validator.py` | BLE address classification (`classify_ble_address`, `is_static_address`); `GATTProbeResult` dataclass |
@@ -74,11 +78,11 @@ Both paths are completely separate and independent. Each produces `PassiveBlueto
 - **Entity metadata always from library:** `char_instance.name`, `.unit`, `data.parsed_value`, `spec.primary_field` — never hardcode
 - **GATT probe/poll:** `GATTManager.async_probe_device()` → `GATTProbeResult`; `async_probe_and_setup()` with semaphore; `async_poll_gatt_with_semaphore()` called by `ActiveBluetoothProcessorCoordinator`'s `poll_method` closure. Polling lifecycle owned by the framework, not `GATTManager`.
 - **Discovery tracking:** `DiscoveryTracker` manages seen/rejected/stale device sets with LRU eviction and periodic cleanup
-- **Advertisement management:** `AdvertisementManager` owns conversion (`BluetoothServiceInfoBleak` → `AdvertisementData`), per-device tracking, RSSI, callbacks; composed into `HomeAssistantBluetoothAdapter`; static helpers `get_manufacturer_name`/`get_model_name` used by coordinator
-- **Support detection:** `SupportDetector` consolidates checking service data, manufacturer data, and GATT probes; produces `CharacteristicInfo` lists and summaries; composed into coordinator
+- **Advertisement management:** `AdvertisementManager` owns per-device tracking, RSSI, callbacks; composed into `HomeAssistantBluetoothAdapter`; static helpers `get_manufacturer_name`/`get_model_name` used by coordinator
+- **Support detection:** `SupportDetector` consolidates checking service data, manufacturer data, and GATT probes; produces `DiscoveredCharacteristic` lists and summaries; composed into coordinator
 - **Registry pre-warming:** `prewarm_registries()` static method run in executor during setup
 - **No RSSI entities** — handled by other BLE monitor integrations
-- **BLE address classification:** `classify_ble_address()` in `device_validator.py` checks **two metadata formats**: (1) BlueZ native: `device.details["props"]["AddressType"]` → `"public"`/`"random"`, (2) ESPHome proxy (via bleak-esphome): `device.details["address_type"]` → `0` (public) / `1` (random). Random addresses are sub-classified by top 2 bits of the first MAC octet per BT Core Spec §1.3. RPA (0x40–0x7F) and NRPA (0x00–0x3F) are filtered as ephemeral; Public, Random Static (0xC0–0xFF), and Unknown (no metadata) are treated as stable.
+- **BLE address classification:** `classify_ble_address()` in `device_validator.py` checks **two metadata formats**: (1) BlueZ native: `device.details["props"]["AddressType"]` → `"public"`/`"random"`, (2) ESPHome proxy (via bleak-esphome): `device.details["address_type"]` → `0` (public) / `1` (random). Random addresses are sub-classified by top 2 bits of the first MAC octet per BT Core Spec §1.3. RPA (0x40–0x7F) and NRPA (0x00–0x3F) are filtered as ephemeral; Public, Random Static (0xC0–0xFF), and Unknown (no metadata) are treated as stable. **When no metadata is present**, a MAC-based heuristic is applied: if the first octet falls in the RPA or NRPA range the address is classified as ephemeral (preventing wasted GATT probes and spurious discovery flows); otherwise it returns UNKNOWN (stable).
 - **Public diagnostics API:** `coordinator.get_diagnostics_snapshot()` returns all diagnostic data; `coordinator.is_device_active()` checks processor status
 
 ---
@@ -170,3 +174,13 @@ Key test helpers in `tests/bluetooth_helpers.py`: `load_fixture()`, `load_servic
 - **New platform** (e.g., `binary_sensor`): Add to `PLATFORMS` in `__init__.py`, create platform file following `sensor.py`, extend `_build_passive_bluetooth_update()` in coordinator
 - **Debug logging:** Set `custom_components.bluetooth_sig_devices: debug` and `bluetooth_sig: debug` in HA logger config
 - **Key references:** `ha_plan.md` (design rationale), `tests/conftest.py` (fixtures), `tests/bluetooth_helpers.py` (BLE injection), `tests/fixtures/` (captures), `quality_scale.yaml` (HA quality tracking)
+
+---
+
+## Upstream Library Issues
+
+When you encounter a problem, limitation, or missing functionality in the **`bluetooth-sig-python`** library that forces a workaround in this integration, **always flag it**. Do not silently work around library deficiencies — document them so they can be reported upstream.
+
+1. Add the issue to `UPSTREAM_ISSUES.md` in the repo root with a short description, the workaround used, and the status.
+2. Mark the workaround in code with a comment (e.g. `# UPSTREAM: see UPSTREAM_ISSUES.md`).
+3. If significant, open a GitHub issue on the library repo.

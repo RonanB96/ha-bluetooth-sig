@@ -152,6 +152,136 @@ class TestClassifyBLEAddress:
         assert classify_ble_address(si) == BLEAddressType.UNKNOWN
 
 
+class TestMACHeuristicFallback:
+    """Test MAC-based heuristic when no BlueZ/ESPHome metadata is present.
+
+    When neither BlueZ ``AddressType`` nor ESPHome ``address_type`` is
+    available, the classifier falls back to the first-octet heuristic
+    (BT Core Spec Vol 6, Part B, §1.3) to filter likely-ephemeral
+    addresses.
+    """
+
+    def test_no_metadata_rpa_range_classified_as_rpa(self) -> None:
+        """No metadata + first byte in RPA range → RESOLVABLE_PRIVATE."""
+        # 0x69 = 01101001 → top bits = 01 → RPA
+        si = _make_service_info("69:D1:8A:16:39:16", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.RESOLVABLE_PRIVATE
+
+    def test_no_metadata_rpa_boundary_low(self) -> None:
+        """No metadata + first byte 0x40 → RESOLVABLE_PRIVATE."""
+        si = _make_service_info("40:00:00:00:00:00", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.RESOLVABLE_PRIVATE
+
+    def test_no_metadata_rpa_boundary_high(self) -> None:
+        """No metadata + first byte 0x7F → RESOLVABLE_PRIVATE."""
+        si = _make_service_info("7F:FF:FF:FF:FF:FF", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.RESOLVABLE_PRIVATE
+
+    def test_no_metadata_nrpa_range_classified_as_nrpa(self) -> None:
+        """No metadata + first byte in NRPA range → NON_RESOLVABLE_PRIVATE."""
+        # 0x1A = 00011010 → top bits = 00 → NRPA
+        si = _make_service_info("1A:BB:CC:DD:EE:FF", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.NON_RESOLVABLE_PRIVATE
+
+    def test_no_metadata_nrpa_boundary_low(self) -> None:
+        """No metadata + first byte 0x00 → NON_RESOLVABLE_PRIVATE."""
+        si = _make_service_info("00:11:22:33:44:55", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.NON_RESOLVABLE_PRIVATE
+
+    def test_no_metadata_nrpa_boundary_high(self) -> None:
+        """No metadata + first byte 0x3F → NON_RESOLVABLE_PRIVATE."""
+        si = _make_service_info("3F:FF:FF:FF:FF:FF", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.NON_RESOLVABLE_PRIVATE
+
+    def test_no_metadata_random_static_range_stays_unknown(self) -> None:
+        """No metadata + first byte in Random Static range → UNKNOWN.
+
+        Without metadata we cannot distinguish a real Random Static address
+        from a public address in the same byte range, so UNKNOWN (stable) is
+        the safe default.
+        """
+        si = _make_service_info("C0:11:22:33:44:55", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.UNKNOWN
+
+    def test_no_metadata_reserved_range_stays_unknown(self) -> None:
+        """No metadata + first byte in reserved range → UNKNOWN."""
+        si = _make_service_info("80:AA:BB:CC:DD:EE", address_type=None)
+        assert classify_ble_address(si) == BLEAddressType.UNKNOWN
+
+    def test_no_metadata_rpa_is_not_static(self) -> None:
+        """No metadata + RPA range → is_static_address() returns False."""
+        si = _make_service_info("69:D1:8A:16:39:16", address_type=None)
+        assert is_static_address(si) is False
+
+    def test_no_metadata_nrpa_is_not_static(self) -> None:
+        """No metadata + NRPA range → is_static_address() returns False."""
+        si = _make_service_info("1A:BB:CC:DD:EE:FF", address_type=None)
+        assert is_static_address(si) is False
+
+    def test_no_metadata_reserved_is_static(self) -> None:
+        """No metadata + reserved range → is_static_address() returns True."""
+        si = _make_service_info("AA:BB:CC:DD:EE:FF", address_type=None)
+        assert is_static_address(si) is True
+
+    def test_no_metadata_random_static_range_is_static(self) -> None:
+        """No metadata + Random Static range → is_static_address() returns True."""
+        si = _make_service_info("C0:11:22:33:44:55", address_type=None)
+        assert is_static_address(si) is True
+
+    def test_real_log_rpa_flood_all_filtered(self) -> None:
+        """Regression: all 35 RPA addresses from production logs are ephemeral.
+
+        These addresses caused spurious discovery flows because no BlueZ/ESPHome
+        metadata was present and the classifier returned UNKNOWN (stable).
+        """
+        rpa_addresses = [
+            "46:26:D3:CF:3A:41",
+            "46:D6:FD:41:F4:82",
+            "47:3C:57:DF:0A:BE",
+            "4B:24:61:59:7A:E5",
+            "4D:F7:E4:BD:A2:1E",
+            "4E:F4:2D:05:77:05",
+            "50:41:96:6E:D6:2B",
+            "55:4B:2F:2A:50:7F",
+            "55:91:F0:C4:93:F1",
+            "56:2B:FA:C5:69:AE",
+            "56:84:27:25:99:B2",
+            "58:38:DB:D8:74:F0",
+            "5A:3C:73:1A:B9:1E",
+            "5C:76:4C:69:80:D2",
+            "60:9C:66:37:82:79",
+            "62:66:D5:B8:07:33",
+            "63:A9:80:C7:D5:EA",
+            "65:8B:54:95:02:C5",
+            "66:79:1D:DD:62:AE",
+            "69:A6:04:1A:D5:BE",
+            "69:D1:8A:16:39:16",
+            "6B:1C:D9:7A:B7:AB",
+            "6B:D3:24:76:80:7F",
+            "6E:9A:15:80:51:63",
+            "70:44:43:9B:2C:A5",
+            "71:22:4D:B9:6F:C6",
+            "71:58:86:B6:FA:16",
+            "77:17:7D:34:11:C4",
+            "78:65:94:89:3E:BD",
+            "79:0A:F1:D8:29:7A",
+            "7B:9C:A1:A4:8D:DF",
+            "7C:A5:A3:75:B0:7D",
+            "7C:ED:4C:43:68:3A",
+            "7D:7D:B9:BF:0D:1C",
+            "7D:AC:9F:69:F5:DB",
+        ]
+        for addr in rpa_addresses:
+            si = _make_service_info(addr, address_type=None)
+            result = classify_ble_address(si)
+            assert result == BLEAddressType.RESOLVABLE_PRIVATE, (
+                f"{addr}: expected RESOLVABLE_PRIVATE, got {result}"
+            )
+            assert is_static_address(si) is False, (
+                f"{addr}: should be filtered as ephemeral"
+            )
+
+
 class TestIsStaticAddress:
     """Test is_static_address helper."""
 

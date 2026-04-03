@@ -13,7 +13,19 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL, DOMAIN
+from .const import (
+    CONF_CONNECTION_TIMEOUT,
+    CONF_MAX_CONCURRENT_CONNECTIONS,
+    CONF_MAX_PROBE_RETRIES,
+    CONF_POLL_INTERVAL,
+    CONF_STALE_DEVICE_TIMEOUT,
+    DEFAULT_CONCURRENT_CONNECTIONS,
+    DEFAULT_CONNECTION_TIMEOUT,
+    DEFAULT_POLL_INTERVAL_SECONDS,
+    DEFAULT_PROBE_RETRIES,
+    DEFAULT_STALE_DEVICE_TIMEOUT,
+    DOMAIN,
+)
 from .coordinator import BluetoothSIGCoordinator
 
 type BluetoothSIGConfigEntry = ConfigEntry[BluetoothSIGCoordinator]
@@ -60,16 +72,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return await _async_setup_device_entry(hass, entry)
 
 
-async def _async_setup_hub_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def _async_setup_hub_entry(
+    hass: HomeAssistant, entry: BluetoothSIGConfigEntry
+) -> bool:
     """Set up the discovery hub entry."""
-    poll_seconds = entry.options.get(
-        CONF_POLL_INTERVAL, int(DEFAULT_POLL_INTERVAL.total_seconds())
+    poll_seconds = entry.options.get(CONF_POLL_INTERVAL, DEFAULT_POLL_INTERVAL_SECONDS)
+    max_connections = entry.options.get(
+        CONF_MAX_CONCURRENT_CONNECTIONS, DEFAULT_CONCURRENT_CONNECTIONS
+    )
+    connection_timeout = entry.options.get(
+        CONF_CONNECTION_TIMEOUT, DEFAULT_CONNECTION_TIMEOUT
+    )
+    max_retries = entry.options.get(CONF_MAX_PROBE_RETRIES, DEFAULT_PROBE_RETRIES)
+    stale_timeout = entry.options.get(
+        CONF_STALE_DEVICE_TIMEOUT, DEFAULT_STALE_DEVICE_TIMEOUT
     )
 
     # Pre-warm bluetooth-sig registries before creating the coordinator.
     await hass.async_add_executor_job(BluetoothSIGCoordinator.prewarm_registries)
 
-    coordinator = BluetoothSIGCoordinator(hass, entry, poll_interval=poll_seconds)
+    coordinator = BluetoothSIGCoordinator(
+        hass,
+        entry,
+        poll_interval=poll_seconds,
+        max_concurrent_probes=max_connections,
+        connection_timeout=connection_timeout,
+        max_probe_retries=max_retries,
+        stale_device_timeout=stale_timeout,
+    )
 
     # Store coordinator centrally so device entries can access it
     hass.data.setdefault(DOMAIN, {})
@@ -99,7 +129,9 @@ async def _async_setup_hub_entry(hass: HomeAssistant, entry: ConfigEntry) -> boo
     return True
 
 
-async def _async_setup_device_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def _async_setup_device_entry(
+    hass: HomeAssistant, entry: BluetoothSIGConfigEntry
+) -> bool:
     """Set up a per-device entry with its own processor coordinator."""
     # Get the hub coordinator — it holds the translator and device instances
     hub_data = hass.data.get(DOMAIN, {})
@@ -109,6 +141,9 @@ async def _async_setup_device_entry(hass: HomeAssistant, entry: ConfigEntry) -> 
 
     # Store coordinator reference for use by sensor platform
     entry.runtime_data = coordinator
+
+    # Reload this device entry when its options change
+    entry.async_on_unload(entry.add_update_listener(_async_device_options_updated))
 
     # Forward to sensor platform which creates the processor and entities
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -166,5 +201,12 @@ async def async_remove_config_entry_device(
 async def _async_options_updated(
     hass: HomeAssistant, entry: BluetoothSIGConfigEntry
 ) -> None:
-    """Reload the integration when options change."""
+    """Reload the integration when hub options change."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def _async_device_options_updated(
+    hass: HomeAssistant, entry: BluetoothSIGConfigEntry
+) -> None:
+    """Reload only the device entry when its options change."""
     await hass.config_entries.async_reload(entry.entry_id)

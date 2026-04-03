@@ -101,18 +101,16 @@ class TestBluetoothSIGSensorEntityAvailable:
         """Available → unavailable → available logs correct messages in order."""
         with caplog.at_level("INFO"):
             self._call_available(entity, parent_available=True)
-        assert entity._unavailable_logged is False  # noqa: SLF001
+            assert entity._unavailable_logged is False  # noqa: SLF001
 
-        with caplog.at_level("INFO"):
             self._call_available(entity, parent_available=False)
-        assert entity._unavailable_logged is True  # noqa: SLF001
-        assert "unavailable" in caplog.text
+            assert entity._unavailable_logged is True  # noqa: SLF001
+            assert "unavailable" in caplog.text
 
-        caplog.clear()
-        with caplog.at_level("INFO"):
+            caplog.clear()
             self._call_available(entity, parent_available=True)
-        assert entity._unavailable_logged is False  # noqa: SLF001
-        assert "back online" in caplog.text
+            assert entity._unavailable_logged is False  # noqa: SLF001
+            assert "back online" in caplog.text
 
 
 class TestBluetoothSIGSensorEntityNativeValue:

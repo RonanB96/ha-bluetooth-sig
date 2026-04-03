@@ -8,7 +8,7 @@
       },
       "integration_discovery_confirm": {
         "title": "Confirm Bluetooth SIG Device",
-        "description": "A Bluetooth SIG device was discovered:\n\n**{name}**\n\nDetected characteristics:\n{characteristics}\n\nWould you like to add this device?"
+        "description": "A Bluetooth SIG device was discovered:\n\n**{name}**\nAddress: `{address}`{manufacturer}{rssi}\n\n{characteristics}\n\nWould you like to add this device?"
       }
     },
     "abort": {
@@ -19,14 +19,34 @@
   },
   "options": {
     "step": {
-      "init": {
+      "hub_options": {
         "title": "Bluetooth SIG Devices Options",
-        "description": "Configure how often connectable devices are polled for GATT characteristic data.",
+        "description": "Configure global settings for Bluetooth SIG device scanning and GATT connections.",
         "data": {
-          "poll_interval": "Poll interval (seconds)"
+          "poll_interval": "Poll interval (seconds)",
+          "max_concurrent_connections": "Max concurrent connections",
+          "connection_timeout": "Connection timeout (seconds)",
+          "max_probe_retries": "Max probe retries",
+          "stale_device_timeout": "Stale device timeout (seconds)"
         },
         "data_description": {
-          "poll_interval": "How often to read GATT characteristics from connectable devices. Range: 30-86400 seconds."
+          "poll_interval": "How often to read GATT characteristics from connectable devices. Range: 30–86400 seconds.",
+          "max_concurrent_connections": "Maximum simultaneous BLE connections for probing and polling. Lower values reduce radio contention; higher values speed up multi-device polling. Range: 1–5.",
+          "connection_timeout": "Timeout for establishing a BLE connection. Increase for unreliable adapters or congested environments. Range: 10–120 seconds.",
+          "max_probe_retries": "Maximum attempts to probe a device's GATT services before giving up. Range: 1–10.",
+          "stale_device_timeout": "Time after which unseen devices are cleaned up from the tracker. Range: 300–86400 seconds."
+        }
+      },
+      "device_options": {
+        "title": "Device Options",
+        "description": "Configure GATT connection settings for this device.",
+        "data": {
+          "gatt_enabled": "Enable GATT connections",
+          "device_poll_interval": "Poll interval override (seconds)"
+        },
+        "data_description": {
+          "gatt_enabled": "When disabled, only passive advertisement data is used. GATT characteristic polling is stopped.",
+          "device_poll_interval": "Set to 0 to use the global hub default. Set a value (30–86400) to override the global poll interval for this device only."
         }
       }
     }

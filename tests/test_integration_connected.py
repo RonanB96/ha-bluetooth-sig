@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.bluetooth_sig_devices.const import DOMAIN
@@ -220,26 +221,31 @@ async def test_smart_watch_gatt_probe_current_time_struct(
 
     await _run_gatt_probe(hass, device, first_normal)
 
-    all_states = hass.states.async_all("sensor")
-    entity_ids = [s.entity_id for s in all_states]
+    # Current Time has role=STATUS → diagnostic → disabled by default.
+    # Disabled entities are registered but not in hass.states.
+    registry = er.async_get(hass)
+    all_entries = er.async_entries_for_config_entry(
+        registry, hass.config_entries.async_entries(DOMAIN)[-1].entry_id
+    )
+    registered_ids = [e.entity_id for e in all_entries]
 
     # Current Time is a struct — should produce per-field sub-entities
     time_related = [
         eid
-        for eid in entity_ids
+        for eid in registered_ids
         if any(kw in eid for kw in ("date_time", "day_of_week", "fractions256"))
     ]
     assert time_related, (
         f"Expected Current Time struct sub-entities (date_time, day_of_week, "
-        f"fractions256), got entity IDs: {entity_ids}"
+        f"fractions256), got registered entity IDs: {registered_ids}"
     )
 
-    # Verify day_of_week has expected enum name
-    dow_states = _find_sensor_states(hass, contains="day_of_week")
-    if dow_states:
-        assert dow_states[0].state == "THURSDAY", (
-            f"Expected day_of_week='THURSDAY', got {dow_states[0].state!r}"
-        )
+    # Verify the day_of_week entity is disabled (diagnostic)
+    dow_entries = [e for e in all_entries if "day_of_week" in e.entity_id]
+    assert dow_entries, "No day_of_week entity registered"
+    assert dow_entries[0].disabled_by is not None, (
+        "Expected day_of_week entity to be disabled (diagnostic)"
+    )
 
 
 @pytest.mark.usefixtures("enable_bluetooth")
@@ -363,21 +369,27 @@ async def test_health_monitor_gatt_probe_body_sensor_location(
 
     await _run_gatt_probe(hass, device, first_normal)
 
-    all_states = hass.states.async_all("sensor")
+    # Body Sensor Location has role=STATUS → diagnostic → disabled by default.
+    # Disabled entities are registered but not in hass.states.
+    registry = er.async_get(hass)
+    all_entries = er.async_entries_for_config_entry(
+        registry, hass.config_entries.async_entries(DOMAIN)[-1].entry_id
+    )
+    registered_ids = [e.entity_id for e in all_entries]
 
-    # Look for body_sensor_location entity
-    bsl_entities = [
-        s for s in all_states if "body_sensor" in s.entity_id or "2a38" in s.entity_id
+    # Look for body_sensor_location entity in registry
+    bsl_entries = [
+        e for e in all_entries if "body_sensor" in e.entity_id or "2a38" in e.entity_id
     ]
 
-    assert bsl_entities, (
-        f"No Body Sensor Location entity found, "
-        f"all entity IDs: {[s.entity_id for s in all_states]}"
+    assert bsl_entries, (
+        f"No Body Sensor Location entity registered, "
+        f"all registered entity IDs: {registered_ids}"
     )
 
-    # BodySensorLocation(1).name = "CHEST"
-    assert bsl_entities[0].state == "CHEST", (
-        f"Expected Body Sensor Location = 'CHEST', got {bsl_entities[0].state!r}"
+    # Verify it's disabled (diagnostic entity)
+    assert bsl_entries[0].disabled_by is not None, (
+        "Expected Body Sensor Location entity to be disabled (diagnostic)"
     )
 
 
@@ -446,7 +458,7 @@ async def test_connectable_device_gatt_probe_creates_entities(
         address=address,
         name=device["name"],
         parseable_count=3,
-        supported_char_uuids=[],
+        supported_char_uuids=(),
     )
 
     device_id = address.replace(":", "").lower()

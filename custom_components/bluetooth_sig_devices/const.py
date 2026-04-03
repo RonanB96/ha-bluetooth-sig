@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 from enum import Enum
-from typing import NamedTuple, TypedDict
+from typing import Any, NamedTuple, TypedDict
+
+from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
+
+# ---------------------------------------------------------------------------
+# Strict type aliases
+# ---------------------------------------------------------------------------
+type BLEAddress = str
 
 DOMAIN = "bluetooth_sig_devices"
 
@@ -12,16 +19,47 @@ DOMAIN = "bluetooth_sig_devices"
 CONF_DEVICE_ADDRESS = "address"
 CONF_POLL_INTERVAL = "poll_interval"
 
+# --- Device-level option keys ---
+CONF_GATT_ENABLED = "gatt_enabled"
+CONF_DEVICE_POLL_INTERVAL = "device_poll_interval"
+
+# --- Hub-level option keys ---
+CONF_MAX_CONCURRENT_CONNECTIONS = "max_concurrent_connections"
+CONF_CONNECTION_TIMEOUT = "connection_timeout"
+CONF_MAX_PROBE_RETRIES = "max_probe_retries"
+CONF_STALE_DEVICE_TIMEOUT = "stale_device_timeout"
+
 # GATT connection defaults
 DEFAULT_POLL_INTERVAL = timedelta(minutes=5)
+DEFAULT_POLL_INTERVAL_SECONDS: int = int(DEFAULT_POLL_INTERVAL.total_seconds())
 MIN_POLL_INTERVAL_SECONDS = 30
 MAX_POLL_INTERVAL_SECONDS = 86400  # 24 hours
-DEFAULT_CONNECTION_TIMEOUT = 30.0
+DEFAULT_CONNECTION_TIMEOUT = 30
 DEFAULT_READ_TIMEOUT = 10.0
+
+# Hub option ranges
+MIN_CONCURRENT_CONNECTIONS = 1
+MAX_CONCURRENT_CONNECTIONS = 5
+DEFAULT_CONCURRENT_CONNECTIONS = 2
+
+MIN_CONNECTION_TIMEOUT = 10
+MAX_CONNECTION_TIMEOUT = 120
+
+MIN_PROBE_RETRIES = 1
+MAX_PROBE_RETRIES = 10
+DEFAULT_PROBE_RETRIES = 3
+
+MIN_STALE_DEVICE_TIMEOUT = 300
+MAX_STALE_DEVICE_TIMEOUT = 86400
+DEFAULT_STALE_DEVICE_TIMEOUT = 3600
 
 # Probe configuration
 MAX_PROBE_FAILURES = 3
 MAX_CONCURRENT_PROBES = 2
+
+# Minimum backoff (seconds) between GATT re-probe attempts for confirmed devices.
+# Prevents rapid retry loops when a previously-added device is temporarily out of range.
+CONFIRMED_DEVICE_PROBE_BACKOFF = DEFAULT_POLL_INTERVAL_SECONDS
 
 # Services that should NOT count as "parseable SIG data"
 # These are standard BLE services that any BLE monitor can expose
@@ -72,7 +110,6 @@ MAX_REJECTED_DEVICES = 4096
 
 # --- Stale device cleanup ---
 STALE_DEVICE_CLEANUP_INTERVAL = timedelta(minutes=15)
-STALE_DEVICE_TIMEOUT_SECONDS = 3600  # 1 hour
 
 
 # ---------------------------------------------------------------------------
@@ -80,19 +117,37 @@ STALE_DEVICE_TIMEOUT_SECONDS = 3600  # 1 hour
 # ---------------------------------------------------------------------------
 
 
-class CharacteristicInfo(NamedTuple):
-    """A discovered characteristic's UUID and human-readable name."""
+class CharacteristicSource(Enum):
+    """How a characteristic was discovered.
 
-    uuid: str
-    name: str
+    Mirrors ``bluetooth_sig.advertising.DataSource`` for the passive
+    advertisement path and adds ``GATT`` for the active connection path.
+    """
+
+    ADVERTISEMENT = "advertisement"
+    GATT = "gatt"
+
+
+class DiscoveredCharacteristic(NamedTuple):
+    """A discovered GATT characteristic and its discovery source.
+
+    ``characteristic`` is the parsed ``BaseCharacteristic[Any]`` instance
+    from the bluetooth-sig library, and ``source`` records whether it was
+    discovered via advertising data or an active GATT probe.
+    """
+
+    characteristic: BaseCharacteristic[Any]
+    source: CharacteristicSource = CharacteristicSource.ADVERTISEMENT
 
 
 class DiscoveryData(TypedDict):
     """Data passed to ``discovery_flow.async_create_flow``."""
 
-    address: str
+    address: BLEAddress
     name: str
     characteristics: str
+    manufacturer: str
+    rssi: int | None
 
 
 class GATTProbeSnapshotData(TypedDict):
@@ -120,6 +175,7 @@ class DiagnosticsSnapshot(TypedDict):
     """Complete diagnostics snapshot returned by the coordinator."""
 
     device_statistics: DeviceStatistics
-    gatt_probe_results: dict[str, GATTProbeSnapshotData]
-    probe_failures: dict[str, int]
-    known_characteristics: dict[str, list[str]]
+    gatt_probe_results: dict[BLEAddress, GATTProbeSnapshotData]
+    probe_failures: dict[BLEAddress, int]
+    known_characteristics: dict[BLEAddress, list[str]]
+    rejection_reasons: dict[BLEAddress, str]

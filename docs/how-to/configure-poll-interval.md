@@ -19,10 +19,10 @@ The default is **300 seconds** (5 minutes). The allowed range is **30–86,400 s
 
 The change takes effect immediately — no restart is required.
 
-> **Note:** The poll interval is a global setting that applies to all connectable devices managed by this integration. Per-device intervals are not currently supported.
+> **Note:** The poll interval set here is the global default for all connectable devices. You can override the poll interval for individual devices — see [Configure device-specific options](configure-device-options.md).
 
 ## How polling works
 
 - Polling only applies to devices where the integration has successfully probed GATT characteristics during discovery.
 - Advertisement-only devices (non-connectable) are not affected by this setting — they update passively whenever they broadcast.
-- The integration limits concurrent BLE connections to 2 to avoid radio contention.
+- The integration limits concurrent BLE connections (default: 2, configurable via hub options) to avoid radio contention — see [Configuration](../reference/configuration.md#hub-options).

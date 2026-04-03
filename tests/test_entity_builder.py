@@ -402,7 +402,7 @@ class TestAddStructEntities:
             instantaneous_torque_magnitude_array=None,
         )
         _, _, data = self._run(vec)
-        assert len(data) == 6
+        assert len(data) == 7
 
     def test_heart_rate_struct_diverse_types(self) -> None:
         """HeartRateData exercises int, IntEnum, IntFlag, tuple, and optional."""

@@ -269,6 +269,16 @@ def _build_mock_bleak_service(svc_data: dict[str, Any]) -> MagicMock:
         mock_char.handle = char_data["handle"]
         mock_char.description = char_data.get("description", "")
         mock_char.properties = char_data.get("properties", [])
+
+        # Build descriptors if present
+        descs = []
+        for desc_data in char_data.get("descriptors", []):
+            mock_desc = MagicMock()
+            mock_desc.uuid = desc_data["uuid"]
+            mock_desc.handle = desc_data["handle"]
+            descs.append(mock_desc)
+        mock_char.descriptors = descs
+
         chars.append(mock_char)
 
     mock_service.characteristics = chars
@@ -279,20 +289,28 @@ def build_mock_bleak_client(
     device_data: dict[str, Any],
     *,
     mtu_size: int = 23,
+    connect_side_effect: BaseException | None = None,
+    disconnect_side_effect: BaseException | None = None,
 ) -> MagicMock:
     """Build a fully-populated mock ``BleakClient`` from fixture GATT data.
 
     The mock supports:
-    - ``connect()`` / ``disconnect()`` (async no-ops)
+    - ``connect()`` / ``disconnect()`` (async no-ops unless side_effect given)
     - ``is_connected`` → True after connect
     - ``mtu_size`` → configurable (default 23)
     - ``services`` → iterable mock GATT services from fixture
     - ``read_gatt_char(uuid)`` → returns raw bytes from fixture
+    - ``write_gatt_char(uuid, data)`` → async no-op
+    - ``start_notify(uuid, callback)`` / ``stop_notify(uuid)`` → async no-ops
+    - ``read_gatt_descriptor(handle)`` / ``write_gatt_descriptor(handle, data)``
+    - ``pair()`` / ``unpair()`` → async no-ops
 
     Args:
         device_data: The device-level dict from the fixture, which must
             contain a ``gatt_services`` list.
         mtu_size: Simulated MTU size.
+        connect_side_effect: Exception to raise on connect (simulates failure).
+        disconnect_side_effect: Exception to raise on disconnect.
 
     Returns:
         A ``MagicMock`` suitable for patching ``BleakClient``.
@@ -314,8 +332,8 @@ def build_mock_bleak_client(
     client.is_connected = True
     client.mtu_size = mtu_size
     client.services = mock_services
-    client.connect = AsyncMock()
-    client.disconnect = AsyncMock()
+    client.connect = AsyncMock(side_effect=connect_side_effect)
+    client.disconnect = AsyncMock(side_effect=disconnect_side_effect)
 
     async def _mock_read_gatt_char(uuid_or_handle: str | int, **kwargs: Any) -> bytes:
         uuid_str = str(uuid_or_handle).lower()
@@ -324,6 +342,13 @@ def build_mock_bleak_client(
         raise Exception(f"Characteristic {uuid_str} not readable in fixture")
 
     client.read_gatt_char = AsyncMock(side_effect=_mock_read_gatt_char)
+    client.write_gatt_char = AsyncMock()
+    client.start_notify = AsyncMock()
+    client.stop_notify = AsyncMock()
+    client.read_gatt_descriptor = AsyncMock(return_value=bytearray(b"\x00\x00"))
+    client.write_gatt_descriptor = AsyncMock()
+    client.pair = AsyncMock()
+    client.unpair = AsyncMock()
 
     return client
 

@@ -48,6 +48,7 @@ def _make_entry(
         "gatt_probe_results": probe_results_data,
         "probe_failures": dict(_probe_failures),
         "known_characteristics": {},
+        "rejection_reasons": {},
     }
 
     coordinator = MagicMock()

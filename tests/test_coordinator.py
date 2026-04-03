@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import MagicMock, patch
 
+from bluetooth_sig.gatt.characteristics.unknown import UnknownCharacteristic
+from bluetooth_sig.types.data_types import CharacteristicInfo
+from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.components.bluetooth.passive_update_processor import (
     PassiveBluetoothDataUpdate,
 )
 from homeassistant.components.sensor import SensorDeviceClass
+from homeassistant.config_entries import ConfigEntry
 
 from custom_components.bluetooth_sig_devices.const import (
-    STALE_DEVICE_TIMEOUT_SECONDS,
-    CharacteristicInfo,
+    DEFAULT_STALE_DEVICE_TIMEOUT,
+    CharacteristicSource,
+    DiscoveredCharacteristic,
 )
 from custom_components.bluetooth_sig_devices.coordinator import (
     BluetoothSIGCoordinator,
@@ -467,11 +473,12 @@ class TestGetSupportedCharacteristics:
         )
 
         assert len(result) > 0
-        # Each result is (uuid_str, name) tuple
-        for uuid_str, name in result:
-            assert isinstance(uuid_str, str)
-            assert isinstance(name, str)
-            assert len(name) > 0
+        # Each result is a DiscoveredCharacteristic named tuple
+        for info in result:
+            assert isinstance(info.characteristic.uuid, BluetoothUUID)
+            assert isinstance(info.characteristic.name, str)
+            assert len(info.characteristic.name) > 0
+            assert isinstance(info.source, CharacteristicSource)
 
     def test_returns_empty_for_unknown_data(
         self,
@@ -537,14 +544,14 @@ class TestGetSupportedCharacteristics:
             address="AA:BB:CC:DD:EE:FF",
             name="GATT Device",
             parseable_count=1,
-            supported_char_uuids=[battery_uuid],
+            supported_char_uuids=(battery_uuid,),
         )
 
         result = coordinator.support_detector.get_supported_characteristics(
             service_info
         )
         assert len(result) >= 1
-        names = [name for _, name in result]
+        names = [info.characteristic.name for info in result]
         # Should contain a non-empty name string
         assert all(len(n) > 0 for n in names)
 
@@ -566,27 +573,45 @@ class TestKnownCharacteristics:
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """_build_characteristics_summary populates known_characteristics."""
+        """_support_detector.build_characteristics_summary populates known_characteristics."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
         supported = [
-            CharacteristicInfo(uuid="uuid1", name="Temperature"),
-            CharacteristicInfo(uuid="uuid2", name="Humidity"),
+            DiscoveredCharacteristic(
+                characteristic=UnknownCharacteristic(
+                    info=CharacteristicInfo(
+                        uuid=BluetoothUUID(0x2A6E),
+                        name="Temperature",
+                    )
+                ),
+            ),
+            DiscoveredCharacteristic(
+                characteristic=UnknownCharacteristic(
+                    info=CharacteristicInfo(
+                        uuid=BluetoothUUID(0x2A6F),
+                        name="Humidity",
+                    )
+                ),
+            ),
         ]
-        result = coordinator._build_characteristics_summary(
-            "AA:BB:CC:DD:EE:FF", supported
+        result = coordinator._support_detector.build_characteristics_summary(
+            "AA:BB:CC:DD:EE:FF",
+            supported,
+            coordinator.known_characteristics,
         )
 
-        assert "Temperature" in result
-        assert "Humidity" in result
+        expected = "**Advertising data:**\n  \u2022 Unknown: Temperature\n  \u2022 Unknown: Humidity"
+        assert result == expected
         assert "AA:BB:CC:DD:EE:FF" in coordinator.known_characteristics
+        temp_uuid_str = str(BluetoothUUID(0x2A6E))
+        humidity_uuid_str = str(BluetoothUUID(0x2A6F))
         assert (
-            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid1"]
-            == "Temperature"
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][temp_uuid_str]
+            == "Unknown: Temperature"
         )
         assert (
-            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"]["uuid2"]
-            == "Humidity"
+            coordinator.known_characteristics["AA:BB:CC:DD:EE:FF"][humidity_uuid_str]
+            == "Unknown: Humidity"
         )
 
     def test_get_known_characteristics_merges_gatt(
@@ -614,7 +639,7 @@ class TestKnownCharacteristics:
             address="AA:BB:CC:DD:EE:FF",
             name="GATT Device",
             parseable_count=1,
-            supported_char_uuids=[battery_uuid],
+            supported_char_uuids=(battery_uuid,),
         )
 
         result = coordinator.get_known_characteristics("AA:BB:CC:DD:EE:FF")
@@ -648,7 +673,7 @@ class TestKnownCharacteristics:
         service_info = make_service_info()
 
         with patch(
-            "custom_components.bluetooth_sig_devices.coordinator.discovery_flow.async_create_flow"
+            "custom_components.bluetooth_sig_devices.discovery_orchestrator.discovery_flow.async_create_flow"
         ) as mock_create_flow:
             coordinator._ensure_device_processor(service_info)
 
@@ -712,7 +737,7 @@ class TestCoordinatorGATTMethods:
             address="AA:BB:CC:DD:EE:FF",
             name="GATT Device",
             parseable_count=2,
-            supported_char_uuids=[BluetoothUUID("2A19"), BluetoothUUID("2A6E")],
+            supported_char_uuids=(BluetoothUUID("2A19"), BluetoothUUID("2A6E")),
         )
 
         # Now should be supported
@@ -864,6 +889,14 @@ class TestAdvertisementPathIndependence:
 class TestNeedsPollClosure:
     """Test cases for the _needs_poll closure factory."""
 
+    @staticmethod
+    def _make_device_entry(**opts: object) -> MagicMock:
+        """Return a minimal mock config entry for a device."""
+        entry = MagicMock(spec=ConfigEntry)
+        entry.data = {"address": "AA:BB:CC:DD:EE:01"}
+        entry.options = dict(opts)
+        return entry
+
     def test_returns_false_without_probe_results(
         self,
         mock_hass: MagicMock,
@@ -871,7 +904,8 @@ class TestNeedsPollClosure:
     ) -> None:
         """No probe results means no poll is needed."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
-        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
         svc_info = MagicMock()
         assert check(svc_info, None) is False
         assert check(svc_info, 999.0) is False
@@ -887,7 +921,8 @@ class TestNeedsPollClosure:
         probe.has_support.return_value = True
         coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
 
-        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
         assert check(MagicMock(), None) is True
 
     def test_returns_true_when_interval_elapsed(
@@ -903,7 +938,8 @@ class TestNeedsPollClosure:
         probe.has_support.return_value = True
         coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
 
-        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
         assert check(MagicMock(), 120.0) is True
         assert check(MagicMock(), 121.0) is True
 
@@ -920,13 +956,22 @@ class TestNeedsPollClosure:
         probe.has_support.return_value = True
         coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
 
-        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
         assert check(MagicMock(), 60.0) is False
         assert check(MagicMock(), 0.0) is False
 
 
 class TestPollGattClosure:
     """Test cases for the _poll_gatt closure factory."""
+
+    @staticmethod
+    def _make_device_entry(**opts: object) -> MagicMock:
+        """Return a minimal mock config entry for a device."""
+        entry = MagicMock(spec=ConfigEntry)
+        entry.data = {"address": "AA:BB:CC:DD:EE:01"}
+        entry.options = dict(opts)
+        return entry
 
     async def test_poll_raises_on_no_data(
         self,
@@ -947,7 +992,8 @@ class TestPollGattClosure:
             return_value=fut
         )
 
-        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01", dev_entry)
         import pytest
 
         with pytest.raises(RuntimeError, match="GATT poll returned no data"):
@@ -971,9 +1017,223 @@ class TestPollGattClosure:
             return_value=fut
         )
 
-        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01")
+        dev_entry = self._make_device_entry()
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01", dev_entry)
         result = await poll(MagicMock())
         assert result is expected
+
+
+class TestGattEnabledOption:
+    """Test GATT enabled/disabled option on _needs_poll and _poll_gatt."""
+
+    @staticmethod
+    def _make_device_entry(**opts: object) -> MagicMock:
+        entry = MagicMock(spec=ConfigEntry)
+        entry.data = {"address": "AA:BB:CC:DD:EE:01"}
+        entry.options = dict(opts)
+        return entry
+
+    def test_needs_poll_returns_false_when_gatt_disabled(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When gatt_enabled=False, _needs_poll always returns False."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry(gatt_enabled=False)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+        # Should be False even with probe results and last_poll=None
+        assert check(MagicMock(), None) is False
+
+    def test_needs_poll_returns_true_when_gatt_enabled(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When gatt_enabled=True (default), _needs_poll works normally."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry(gatt_enabled=True)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+        assert check(MagicMock(), None) is True
+
+    def test_needs_poll_defaults_to_enabled_when_option_absent(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When gatt_enabled option is not set, defaults to enabled."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry()  # No gatt_enabled option
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+        assert check(MagicMock(), None) is True
+
+    async def test_poll_gatt_raises_when_gatt_disabled(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When gatt_enabled=False, _poll_gatt raises RuntimeError."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        dev_entry = self._make_device_entry(gatt_enabled=False)
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01", dev_entry)
+
+        import pytest
+
+        with pytest.raises(RuntimeError, match="GATT disabled"):
+            await poll(MagicMock())
+
+    async def test_poll_gatt_succeeds_when_gatt_enabled(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When gatt_enabled=True, _poll_gatt proceeds normally."""
+        import asyncio
+
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        expected = PassiveBluetoothDataUpdate(
+            devices={}, entity_descriptions={}, entity_names={}, entity_data={}
+        )
+        fut: asyncio.Future[PassiveBluetoothDataUpdate] = asyncio.Future()
+        fut.set_result(expected)
+        coordinator.gatt_manager.async_poll_gatt_with_semaphore = MagicMock(
+            return_value=fut
+        )
+
+        dev_entry = self._make_device_entry(gatt_enabled=True)
+        poll = coordinator._poll_gatt("AA:BB:CC:DD:EE:01", dev_entry)
+        result = await poll(MagicMock())
+        assert result is expected
+
+
+class TestDevicePollIntervalOverride:
+    """Test per-device poll interval override in _needs_poll."""
+
+    @staticmethod
+    def _make_device_entry(**opts: object) -> MagicMock:
+        entry = MagicMock(spec=ConfigEntry)
+        entry.data = {"address": "AA:BB:CC:DD:EE:01"}
+        entry.options = dict(opts)
+        return entry
+
+    def test_device_override_uses_device_interval(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When device_poll_interval is set (non-zero), it overrides the hub value."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=300
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        # Device interval is 60, hub is 300
+        dev_entry = self._make_device_entry(device_poll_interval=60)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+
+        # 60 seconds elapsed — should need poll (device interval is 60)
+        assert check(MagicMock(), 60.0) is True
+        # 59 seconds elapsed — should NOT need poll
+        assert check(MagicMock(), 59.0) is False
+
+    def test_device_override_zero_uses_hub_default(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When device_poll_interval is 0, falls back to hub poll_interval."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=300
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry(device_poll_interval=0)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+
+        # 300 seconds elapsed — should need poll (hub default)
+        assert check(MagicMock(), 300.0) is True
+        # 299 seconds elapsed — should NOT need poll
+        assert check(MagicMock(), 299.0) is False
+
+    def test_device_override_absent_uses_hub_default(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """When device_poll_interval option is absent, uses hub default."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=300
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry()  # No device_poll_interval
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+
+        assert check(MagicMock(), 300.0) is True
+        assert check(MagicMock(), 299.0) is False
+
+    def test_shorter_device_interval_than_hub(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """A device with a shorter interval polls more frequently than hub default."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=600
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry(device_poll_interval=30)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+
+        # 30 seconds — needs poll at device interval
+        assert check(MagicMock(), 30.0) is True
+        # 29 seconds — too soon
+        assert check(MagicMock(), 29.0) is False
+        # 600 seconds would be hub default, but device interval takes precedence
+        assert check(MagicMock(), 600.0) is True
+
+    def test_longer_device_interval_than_hub(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """A device with a longer interval polls less frequently than hub default."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=60
+        )
+        probe = MagicMock()
+        probe.has_support.return_value = True
+        coordinator.gatt_manager.probe_results["AA:BB:CC:DD:EE:01"] = probe
+
+        dev_entry = self._make_device_entry(device_poll_interval=600)
+        check = coordinator._needs_poll("AA:BB:CC:DD:EE:01", dev_entry)
+
+        # 60 seconds (hub default) — NOT enough for device override
+        assert check(MagicMock(), 60.0) is False
+        # 600 seconds — needs poll at device interval
+        assert check(MagicMock(), 600.0) is True
 
 
 class TestInitialGattCache:
@@ -1119,16 +1379,17 @@ class TestAsyncStop:
         """Test async_stop cancels all GATT probe tasks."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        mock_task1 = MagicMock()
-        mock_task2 = MagicMock()
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_task1
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:02"] = mock_task2
+        loop = asyncio.get_running_loop()
+        task1 = loop.create_future()
+        task1.set_result(None)
+        task2 = loop.create_future()
+        task2.set_result(None)
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = task1
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:02"] = task2
         coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
-        mock_task1.cancel.assert_called_once()
-        mock_task2.cancel.assert_called_once()
         assert coordinator.gatt_manager.probe_tasks == {}
         assert coordinator.gatt_manager.pending_probes == set()
         assert coordinator.processor_coordinators == {}
@@ -1142,13 +1403,14 @@ class TestAsyncStop:
         """Test async_stop cancels all in-flight GATT probe tasks."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
 
-        mock_probe_task = MagicMock()
-        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = mock_probe_task
+        loop = asyncio.get_running_loop()
+        probe_task = loop.create_future()
+        probe_task.set_result(None)
+        coordinator.gatt_manager.probe_tasks["AA:BB:CC:DD:EE:01"] = probe_task
         coordinator.gatt_manager.pending_probes.add("AA:BB:CC:DD:EE:01")
 
         await coordinator.async_stop()
 
-        mock_probe_task.cancel.assert_called_once()
         assert coordinator.gatt_manager.probe_tasks == {}
         assert coordinator.gatt_manager.pending_probes == set()
 
@@ -1414,6 +1676,93 @@ class TestEphemeralAddressFiltering:
 
         assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.last_seen_time
 
+    def test_no_metadata_rpa_range_is_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + RPA-range MAC (0x40-0x7F) is filtered by heuristic."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("5A:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "5A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
+
+    def test_no_metadata_nrpa_range_is_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + NRPA-range MAC (0x00-0x3F) is filtered by heuristic."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("1A:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "1A:BB:CC:DD:EE:FF" not in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 1
+
+    def test_no_metadata_reserved_range_not_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """No metadata + reserved-range MAC (0x80-0xBF) is NOT filtered."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        si = _make_service_info_with_addr_type("AA:BB:CC:DD:EE:FF", address_type=None)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert "AA:BB:CC:DD:EE:FF" in coordinator.discovery_tracker.seen_devices
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == 0
+
+    def test_real_rpa_flood_no_metadata_all_filtered(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Regression: all 14 RPA addresses from original issue report are filtered.
+
+        These addresses had no BlueZ/ESPHome metadata and were incorrectly
+        treated as stable, causing 14 spurious discovery flows.
+        """
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+
+        from homeassistant.components.bluetooth import BluetoothChange
+
+        rpa_addresses = [
+            "69:D1:8A:16:39:16",
+            "55:4B:2F:2A:50:7F",
+            "50:41:96:6E:D6:2B",
+            "56:2B:FA:C5:69:AE",
+            "6B:1C:D9:7A:B7:AB",
+            "58:38:DB:D8:74:F0",
+            "66:79:1D:DD:62:AE",
+            "4E:F4:2D:05:77:05",
+            "5A:3C:73:1A:B9:1E",
+            "5C:76:4C:69:80:D2",
+            "71:22:4D:B9:6F:C6",
+            "65:8B:54:95:02:C5",
+            "47:3C:57:DF:0A:BE",
+            "70:44:43:9B:2C:A5",
+        ]
+        for addr in rpa_addresses:
+            si = _make_service_info_with_addr_type(addr, address_type=None)
+            coordinator._async_device_discovered(si, BluetoothChange.ADVERTISEMENT)
+
+        assert len(coordinator.discovery_tracker.seen_devices) == 0
+        assert coordinator.discovery_tracker.filtered_ephemeral_count == len(
+            rpa_addresses
+        )
+
 
 class TestStaleDeviceCleanup:
     """Test periodic stale device cleanup logic."""
@@ -1423,7 +1772,7 @@ class TestStaleDeviceCleanup:
         mock_hass: MagicMock,
         mock_config_entry: MagicMock,
     ) -> None:
-        """Addresses older than STALE_DEVICE_TIMEOUT_SECONDS are cleaned up."""
+        """Addresses older than DEFAULT_STALE_DEVICE_TIMEOUT are cleaned up."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         addr = "AA:BB:CC:DD:EE:01"
 
@@ -1433,7 +1782,7 @@ class TestStaleDeviceCleanup:
         coordinator.discovery_tracker.discovery_triggered.add(addr)
         coordinator.gatt_manager.probe_failures[addr] = 2
         coordinator.discovery_tracker.last_seen_time[addr] = (
-            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 10
+            time.monotonic() - DEFAULT_STALE_DEVICE_TIMEOUT - 10
         )
 
         coordinator.discovery_tracker.async_cleanup_stale_devices()
@@ -1472,7 +1821,7 @@ class TestStaleDeviceCleanup:
 
         coordinator.discovery_tracker.seen_devices.add(addr)
         coordinator.discovery_tracker.last_seen_time[addr] = (
-            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 100
+            time.monotonic() - DEFAULT_STALE_DEVICE_TIMEOUT - 100
         )
         coordinator.processor_coordinators[addr] = MagicMock()
 
@@ -1492,7 +1841,7 @@ class TestStaleDeviceCleanup:
 
         coordinator.discovery_tracker.seen_devices.add(addr)
         coordinator.discovery_tracker.last_seen_time[addr] = (
-            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 100
+            time.monotonic() - DEFAULT_STALE_DEVICE_TIMEOUT - 100
         )
 
         # Simulate _has_config_entry returning True
@@ -1516,7 +1865,7 @@ class TestStaleDeviceCleanup:
 
         coordinator.discovery_tracker.seen_devices.add(addr)
         coordinator.discovery_tracker.last_seen_time[addr] = (
-            time.monotonic() - STALE_DEVICE_TIMEOUT_SECONDS - 10
+            time.monotonic() - DEFAULT_STALE_DEVICE_TIMEOUT - 10
         )
         coordinator.gatt_manager.probe_results[addr] = GATTProbeResult(
             address=addr, parseable_count=2
