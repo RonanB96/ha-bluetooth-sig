@@ -15,11 +15,11 @@ No hardcoded device maps — all parsing is fully library-driven. When the libra
 
 ### HACS (recommended)
 
-[![Open your Home Assistant instance and open the repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=RonanB96&repository=ha-bluetooth-sig&category=integration)
-
-1. Click the badge above, or open HACS → Integrations → ⋮ → Custom repositories and add `RonanB96/ha-bluetooth-sig` as an **Integration**
-2. Download **Bluetooth SIG Devices** from HACS
-3. Restart Home Assistant
+1. Open HACS → Integrations → ⋮ → Custom repositories
+2. Add `https://github.com/RonanB96/ha-bluetooth-sig` as an **Integration**
+3. Download **Bluetooth SIG Devices** from HACS
+4. Restart Home Assistant
+5. Add the integration via **Settings → Devices & Services → Add Integration** and follow the prompts
 
 ### Manual
 
