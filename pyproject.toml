@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Home Assistant integration for Bluetooth SIG devices"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["bluetooth-sig~=0.4"]
+dependencies = ["bluetooth-sig~=0.4.1"]
 
 [tool.hatch.version]
 source = "vcs"
@@ -66,6 +66,8 @@ known-first-party = ["bluetooth_sig_devices"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+exclude = ['(^|/)\.venv/']
+exclude_gitignore = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -76,15 +78,11 @@ warn_unused_ignores = true
 warn_no_return = true
 
 [[tool.mypy.overrides]]
-module = "homeassistant.*"
-ignore_missing_imports = true
+module = "homeassistant.helpers.device_registry"
+follow_imports = "skip"
 
 [[tool.mypy.overrides]]
 module = "bluetooth_sig.*"
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "pytest_homeassistant_custom_component.*"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
