@@ -520,6 +520,47 @@ class TestAsyncProbeDevice:
         # The excluded char should not count
         assert result.parseable_count == 0
 
+    async def test_probe_malformed_characteristic_uuid_is_skipped(self) -> None:
+        """Malformed characteristic UUIDs should not abort the full probe."""
+        mock_hass = MagicMock()
+        coord = _make_coordinator(mock_hass)
+        gatt = coord.gatt_manager
+
+        mock_service = MagicMock()
+        mock_service.uuid = "0000180a-0000-1000-8000-00805f9b34fb"
+        mock_service.characteristics = {"bad-uuid": MagicMock()}
+
+        mock_device = MagicMock()
+        mock_device.connect = AsyncMock()
+        mock_device.connected.discover_services = AsyncMock(return_value=[mock_service])
+        mock_device.disconnect = AsyncMock()
+        coord.devices["AA:BB:CC:DD:EE:FF"] = mock_device
+
+        service_info = _make_service_info()
+
+        def _uuid_factory(value: str) -> MagicMock:
+            if value == mock_service.uuid:
+                valid = MagicMock()
+                valid.short_form = "180A"
+                return valid
+            raise IndexError("list index out of range")
+
+        with (
+            patch(
+                "homeassistant.components.bluetooth.async_ble_device_from_address",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "custom_components.bluetooth_sig_devices.gatt_manager.BluetoothUUID",
+                side_effect=_uuid_factory,
+            ),
+        ):
+            result = await gatt.async_probe_device(service_info)
+
+        assert result is not None
+        assert result.parseable_count == 0
+        assert gatt.probe_failures.get("AA:BB:CC:DD:EE:FF", 0) == 0
+
 
 # ---------------------------------------------------------------------------
 # _read_chars_connected and _build_gatt_entities
