@@ -25,8 +25,8 @@ from typing import Any
 
 from bluetooth_sig.advertising import PayloadContext, parse_advertising_payloads
 from bluetooth_sig.advertising.pdu_parser import AdvertisingPDUParser
-from bluetooth_sig.registry.core.appearance_values import appearance_values_registry
-from bluetooth_sig.registry.core.class_of_device import class_of_device_registry
+from bluetooth_sig.registry.core.appearance_values import get_appearance_values_registry
+from bluetooth_sig.registry.core.class_of_device import get_class_of_device_registry
 from bluetooth_sig.types.advertising import (
     AdvertisementData,
     AdvertisingDataStructures,
@@ -102,13 +102,14 @@ def get_manufacturer_name(advertisement: AdvertisementData) -> str | None:
     """Extract manufacturer name from parsed advertisement data."""
     if advertisement.ad_structures.core.manufacturer_data:
         for mfr_data in advertisement.ad_structures.core.manufacturer_data.values():
+            company_name = mfr_data.company.name if mfr_data.company else None
             if (
-                mfr_data.company
-                and mfr_data.company.name
-                and not mfr_data.company.name.startswith("Unknown")
+                isinstance(company_name, str)
+                and company_name
+                and not company_name.startswith("Unknown")
             ):
-                return mfr_data.company.name
-    if advertisement.interpreter_name:
+                return company_name
+    if isinstance(advertisement.interpreter_name, str):
         return advertisement.interpreter_name
     return None
 
@@ -116,7 +117,7 @@ def get_manufacturer_name(advertisement: AdvertisementData) -> str | None:
 def get_model_name(advertisement: AdvertisementData) -> str | None:
     """Extract model name from parsed advertisement data."""
     local_name = advertisement.ad_structures.core.local_name
-    if local_name:
+    if isinstance(local_name, str) and local_name:
         return local_name
     return None
 
@@ -183,7 +184,8 @@ def _enrich_from_platform_details(
         if ad_structures.properties.appearance is None:
             appearance_val = props.get("Appearance")
             if isinstance(appearance_val, int):
-                info = appearance_values_registry.get_appearance_info(appearance_val)
+                appearance_registry = get_appearance_values_registry()
+                info = appearance_registry.get_appearance_info(appearance_val)
                 ad_structures.properties.appearance = AppearanceData(
                     raw_value=appearance_val, info=info
                 )
@@ -192,6 +194,7 @@ def _enrich_from_platform_details(
         if ad_structures.properties.class_of_device is None:
             class_val = props.get("Class")
             if isinstance(class_val, int) and class_val != 0:
+                class_of_device_registry = get_class_of_device_registry()
                 ad_structures.properties.class_of_device = (
                     class_of_device_registry.decode_class_of_device(class_val)
                 )

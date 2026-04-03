@@ -113,7 +113,7 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_integration_discovery(
         self,
-        discovery_info: DiscoveryData,  # type: ignore[override]
+        discovery_info: dict[str, Any],
     ) -> ConfigFlowResult:
         """Handle a device discovered by the hub coordinator.
 
@@ -121,11 +121,12 @@ class BluetoothSIGDevicesConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         with ``source=integration_discovery`` and ``data`` containing
         the BLE address and device name.
         """
-        address: str = discovery_info["address"]
-        name: str = discovery_info.get("name") or f"Bluetooth Device {address[-8:]}"
-        characteristics: str = discovery_info.get("characteristics", "")
-        manufacturer: str = discovery_info.get("manufacturer", "")
-        rssi: int | None = discovery_info.get("rssi")
+        _discovery_info: DiscoveryData = discovery_info  # type: ignore[assignment]
+        address: str = _discovery_info["address"]
+        name: str = _discovery_info.get("name") or f"Bluetooth Device {address[-8:]}"
+        characteristics: str = _discovery_info.get("characteristics", "")
+        manufacturer: str = _discovery_info.get("manufacturer", "")
+        rssi: int | None = _discovery_info.get("rssi")
 
         _LOGGER.info(
             "Discovery flow received for device %s (%s)",
