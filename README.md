@@ -1,8 +1,37 @@
 # Bluetooth SIG Devices for Home Assistant
 
+[![GitHub Release](https://img.shields.io/github/v/release/RonanB96/ha-bluetooth-sig?style=for-the-badge)](https://github.com/RonanB96/ha-bluetooth-sig/releases)
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge)](https://github.com/hacs/integration)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/RonanB96/ha-bluetooth-sig/hacs.yml?branch=main&label=HACS%20Validation&style=for-the-badge)](https://github.com/RonanB96/ha-bluetooth-sig/actions/workflows/hacs.yml)
+[![License](https://img.shields.io/github/license/RonanB96/ha-bluetooth-sig?style=for-the-badge)](LICENSE)
+
 A Home Assistant custom integration that automatically creates sensors from Bluetooth devices advertising **standard Bluetooth SIG GATT characteristics** using the [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library.
 
 No hardcoded device maps — all parsing is fully library-driven. When the library adds support for a new characteristic, this integration picks it up automatically.
+
+> This integration only supports standard Bluetooth SIG protocols. Devices using proprietary formats (BTHome, Xiaomi, etc.) require their own dedicated integrations.
+
+## Installation
+
+### HACS (recommended)
+
+[![Open your Home Assistant instance and open the repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=RonanB96&repository=ha-bluetooth-sig&category=integration)
+
+1. Click the badge above, or open HACS → Integrations → ⋮ → Custom repositories and add `RonanB96/ha-bluetooth-sig` as an **Integration**
+2. Download **Bluetooth SIG Devices** from HACS
+3. Restart Home Assistant
+
+### Manual
+
+Copy `custom_components/bluetooth_sig_devices` into your `<config>/custom_components/` directory and restart Home Assistant.
+
+## Setup
+
+[![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=bluetooth_sig_devices)
+
+After installation, add the **Bluetooth SIG Devices** integration in **Settings → Devices & Services**, or click the badge above. Discovered devices will appear for one-click confirmation.
+
+See the [Getting Started tutorial](docs/tutorials/getting-started.md) for detailed steps.
 
 ## Features
 
@@ -11,16 +40,6 @@ No hardcoded device maps — all parsing is fully library-driven. When the libra
 - **Passive scanning** — uses Home Assistant's passive Bluetooth infrastructure for low overhead
 - **Active GATT polling** — periodically connects to read characteristics not available in advertisements
 - **Zero per-device configuration** — discovered devices are presented for one-click confirmation
-
-> This integration only supports standard Bluetooth SIG protocols. Devices using proprietary formats (BTHome, Xiaomi, etc.) require their own dedicated integrations.
-
-## Quick Start
-
-1. Install via [HACS](https://hacs.xyz/) or copy `custom_components/bluetooth_sig_devices` manually
-2. Add the **Bluetooth SIG Devices** integration in Settings → Devices & Services
-3. Confirm discovered devices as they appear
-
-See the [Getting Started tutorial](docs/tutorials/getting-started.md) for detailed steps.
 
 ## Documentation
 
@@ -41,49 +60,12 @@ See the [troubleshooting guide](docs/how-to/troubleshooting.md) for common issue
 
 Issues and pull requests are welcome on [GitHub](https://github.com/RonanB96/ha-bluetooth-sig). For adding support for new Bluetooth characteristics, contribute to the upstream [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) library — this integration will pick up changes automatically.
 
-## Development
-
-### Requirements
-
-- Home Assistant 2026.1.0 or newer
-- bluetooth-sig-python
-- Python 3.12 or newer
-
-### Project Structure
-
-```
-custom_components/bluetooth_sig_devices/
-├── __init__.py           # Integration setup
-├── config_flow.py        # Configuration flow
-├── const.py              # Constants
-├── coordinator.py        # Data coordinator
-├── device_adapter.py     # HA ↔ bluetooth-sig-python adapter
-├── manifest.json         # Integration manifest
-├── quality_scale.yaml    # Integration quality tracking
-└── sensor.py             # Sensor platform
-```
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ## Credits
 
 - [bluetooth-sig-python](https://github.com/RonanB96/bluetooth-sig-python) – Core Bluetooth SIG parsing library
 - [Home Assistant](https://www.home-assistant.io/) – Home automation platform
 - [Bluetooth SIG](https://www.bluetooth.com/) – For Bluetooth specifications and GATT standards
-
-## Support
-
-- [Issues](https://github.com/RonanB96/ha-bluetooth-sig/issues) – Report bugs or request features
-- [Discussions](https://github.com/RonanB96/ha-bluetooth-sig/discussions) – Ask questions or share ideas
