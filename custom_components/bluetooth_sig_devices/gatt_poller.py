@@ -34,7 +34,6 @@ from .const import DEFAULT_READ_TIMEOUT, BLEAddress
 from .device_validator import GATTProbeResult
 from .entity_builder import (
     DIAGNOSTIC_ROLES,
-    SKIP_ROLES,
     add_simple_entity,
     add_struct_entities,
 )
@@ -109,15 +108,6 @@ async def build_gatt_entities(
             char_unit: str = char_instance.unit
 
             role: CharacteristicRole = char_instance.role
-            if role in SKIP_ROLES:
-                _LOGGER.debug(
-                    "Skipping GATT %s (role=%s) from %s",
-                    char_name,
-                    role.value,
-                    address,
-                )
-                continue
-
             is_diagnostic = role in DIAGNOSTIC_ROLES
 
             if is_struct_value(parsed_value):

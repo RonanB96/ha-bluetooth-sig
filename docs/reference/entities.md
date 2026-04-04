@@ -54,8 +54,7 @@ Entities are categorised based on the characteristic's role in the GATT specific
 flowchart LR
   char(["Characteristic"]) --> role{"Role?"}
   role -->|Measurement<br>Unknown| vis["✅ Normal entity<br>enabled"]
-  role -->|Status<br>Info| diag["🔧 Diagnostic<br>disabled by default"]
-  role -->|Control<br>Feature| skip["⛔ Not created"]
+  role -->|Status<br>Info<br>Control<br>Feature| diag["🔧 Diagnostic<br>disabled by default"]
 
   style vis fill:#4caf50,color:#fff
   style diag fill:#ff9800,color:#fff
@@ -66,7 +65,7 @@ flowchart LR
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Measurement, Unknown | Normal sensor entity — visible and enabled by default                                                                                                                        |
 | Status, Info         | Diagnostic entity — disabled by default in the entity registry. Enable manually if needed (see [troubleshooting](../how-to/troubleshooting.md#diagnostic-entities-disabled)) |
-| Control, Feature     | No entity created — these are write-oriented characteristics, not suitable for read-only sensors. **Write support is planned for a future release** (see [Planned features](../index.md#planned-features) and [Characteristic Roles](../explanation/roles.md#future-writable-support)). |
+| Control, Feature     | Diagnostic entity when a readable value is available (disabled by default). Write actions are not exposed yet. See [Planned features](../index.md#planned-features). |
 
 ## Availability
 

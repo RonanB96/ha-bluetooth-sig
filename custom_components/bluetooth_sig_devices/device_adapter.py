@@ -32,6 +32,7 @@ from bluetooth_sig.gatt.services.registry import GattServiceRegistry
 from bluetooth_sig.types.advertising import AdvertisementData
 from bluetooth_sig.types.data_types import CharacteristicInfo, ServiceInfo
 from bluetooth_sig.types.device_types import DeviceService, ScannedDevice
+from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -41,6 +42,53 @@ from .advertisement_converter import convert_advertisement as _convert_advertise
 from .const import DEFAULT_CONNECTION_TIMEOUT, DEFAULT_READ_TIMEOUT, BLEAddress
 
 _LOGGER = logging.getLogger(__name__)
+
+_BLEAK_TO_GATT_PROPERTY: dict[str, GattProperty] = {
+    "broadcast": GattProperty.BROADCAST,
+    "read": GattProperty.READ,
+    "writewithoutresponse": GattProperty.WRITE_WITHOUT_RESPONSE,
+    "write": GattProperty.WRITE,
+    "notify": GattProperty.NOTIFY,
+    "indicate": GattProperty.INDICATE,
+    "authenticatedsignedwrites": GattProperty.AUTHENTICATED_SIGNED_WRITES,
+    "extendedproperties": GattProperty.EXTENDED_PROPERTIES,
+    "reliablewrite": GattProperty.RELIABLE_WRITE,
+    "writableauxiliaries": GattProperty.WRITABLE_AUXILIARIES,
+    "encryptread": GattProperty.ENCRYPT_READ,
+    "encryptwrite": GattProperty.ENCRYPT_WRITE,
+    "encryptnotify": GattProperty.ENCRYPT_NOTIFY,
+    "authread": GattProperty.AUTH_READ,
+    "authwrite": GattProperty.AUTH_WRITE,
+    "authnotify": GattProperty.AUTH_NOTIFY,
+}
+
+
+def _normalise_property_name(name: str) -> str:
+    """Normalise a Bleak property label for lookup."""
+    return name.strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+
+
+def _bleak_properties_to_gatt_property(properties: list[str]) -> GattProperty:
+    """Translate Bleak property strings into bluetooth-sig ``GattProperty`` flags."""
+    flags = GattProperty(0)
+    for prop in properties:
+        mapped = _BLEAK_TO_GATT_PROPERTY.get(_normalise_property_name(str(prop)))
+        if mapped is not None:
+            flags |= mapped
+    return flags
+
+
+def serialise_gatt_properties(properties: GattProperty) -> list[str]:
+    """Serialise bluetooth-sig ``GattProperty`` flags into stable string labels."""
+    if properties == GattProperty(0):
+        return []
+    labels: list[str] = []
+    for flag in GattProperty:
+        if flag in properties:
+            name = flag.name
+            if name:
+                labels.append(name.lower().replace("_", "-"))
+    return labels
 
 
 class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
@@ -101,6 +149,8 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
         # Service cache (like BleakRetryConnectionManager)
         self._cached_services: list[DeviceService] | None = None
+        # Runtime GATT properties seen during service discovery.
+        self._characteristic_properties: dict[str, GattProperty] = {}
 
     def update_ble_device(self, ble_device: BLEDevice) -> None:
         """Update the BLE device reference.
@@ -338,6 +388,14 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 self._is_connected = False
                 self._notification_callbacks.clear()
                 self._cached_services = None  # Clear cache on disconnect
+                self._characteristic_properties.clear()
+
+    def get_characteristic_properties_snapshot(self) -> dict[str, GattProperty]:
+        """Return a copy of discovered characteristic properties keyed by UUID."""
+        return {
+            uuid: GattProperty(properties)
+            for uuid, properties in self._characteristic_properties.items()
+        }
 
     async def get_services(self) -> list[DeviceService]:
         """Get GATT services from the connected device.
@@ -361,6 +419,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             return self._cached_services
 
         result: list[DeviceService] = []
+        properties_map: dict[str, GattProperty] = {}
 
         for bleak_service in self._client.services:
             service_uuid = BluetoothUUID(bleak_service.uuid)
@@ -387,6 +446,10 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
             for bleak_char in bleak_service.characteristics:
                 char_uuid = BluetoothUUID(bleak_char.uuid)
                 char_uuid_str = str(char_uuid)
+                bleak_props = [str(p) for p in bleak_char.properties]
+                properties_map[char_uuid_str] = _bleak_properties_to_gatt_property(
+                    bleak_props
+                )
 
                 # Get characteristic class from registry
                 # Run in executor to avoid blocking I/O in event loop
@@ -424,6 +487,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
 
         # Cache the result
         self._cached_services = result
+        self._characteristic_properties = properties_map
         return result
 
     async def read_gatt_char(self, char_uuid: BluetoothUUID) -> bytes:

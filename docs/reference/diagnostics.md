@@ -39,6 +39,7 @@ Per-device GATT probe outcomes, keyed by MAC address:
 | `parseable_characteristics` | Number of characteristics the library can parse  |
 | `has_support`               | Whether any parseable characteristics were found |
 | `probe_failures`            | Number of failed probe attempts for this device  |
+| `characteristic_properties` | Runtime GATT properties per characteristic UUID (e.g. `read`, `write`, `notify`) captured during probing |
 
 ### `probe_failures`
 

@@ -32,6 +32,9 @@ def _make_entry(
             "parseable_characteristics": result.parseable_count,
             "has_support": result.has_support(),
             "probe_failures": _probe_failures.get(addr, 0),
+            "characteristic_properties": getattr(
+                result, "characteristic_properties", {}
+            ),
         }
 
     snapshot = {
@@ -105,6 +108,9 @@ class TestAsyncGetConfigEntryDiagnostics:
         probe = MagicMock()
         probe.parseable_count = 5
         probe.has_support.return_value = True
+        probe.characteristic_properties = {
+            "00002a19-0000-1000-8000-00805f9b34fb": ["read", "notify"]
+        }
 
         entry = _make_entry(
             probe_results={"AA:BB:CC:DD:EE:FF": probe},
@@ -117,6 +123,9 @@ class TestAsyncGetConfigEntryDiagnostics:
         assert probe_data["parseable_characteristics"] == 5
         assert probe_data["has_support"] is True
         assert probe_data["probe_failures"] == 1
+        assert probe_data["characteristic_properties"] == {
+            "00002a19-0000-1000-8000-00805f9b34fb": ["read", "notify"]
+        }
 
     async def test_probe_failures_included_even_without_probe_results(
         self, hass: HomeAssistant

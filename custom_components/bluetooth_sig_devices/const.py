@@ -156,6 +156,7 @@ class GATTProbeSnapshotData(TypedDict):
     parseable_characteristics: int
     has_support: bool
     probe_failures: int
+    characteristic_properties: dict[str, list[str]]
 
 
 class DeviceStatistics(TypedDict):

@@ -41,16 +41,12 @@ _LOGGER = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Role sets used to gate entity creation across all paths
 # ---------------------------------------------------------------------------
-SKIP_ROLES: frozenset[CharacteristicRole] = frozenset(
-    {
-        CharacteristicRole.CONTROL,
-        CharacteristicRole.FEATURE,
-    }
-)
 DIAGNOSTIC_ROLES: frozenset[CharacteristicRole] = frozenset(
     {
         CharacteristicRole.STATUS,
         CharacteristicRole.INFO,
+        CharacteristicRole.CONTROL,
+        CharacteristicRole.FEATURE,
     }
 )
 
@@ -350,16 +346,6 @@ def add_sig_characteristic_entity(
         device_id,
     )
 
-    # Gate: skip characteristics that are not useful as sensor entities
-    if role in SKIP_ROLES:
-        _LOGGER.debug(
-            "Skipping %s (role=%s) for device %s",
-            char_name,
-            role.value,
-            device_id,
-        )
-        return
-
     # Determine entity category from role
     is_diagnostic = role in DIAGNOSTIC_ROLES
 
@@ -459,19 +445,12 @@ def add_service_data_entities(
             if not char_info:
                 continue
 
-            # Use role to gate service data entities
+            # Use role to classify service data entities
             char_class: type[BaseCharacteristic[Any]] | None = (
                 CharacteristicRegistry.get_characteristic_class_by_uuid(service_uuid)
             )
             if char_class is not None:
                 role: CharacteristicRole = char_class().role
-                if role in SKIP_ROLES:
-                    _LOGGER.debug(
-                        "Skipping service data %s (role=%s)",
-                        char_info.name,
-                        role.value,
-                    )
-                    continue
                 is_diagnostic = role in DIAGNOSTIC_ROLES
             else:
                 # Fallback: characteristics with a unit are likely measurements
