@@ -74,15 +74,13 @@ flowchart TD
   expand --> role
 
   role -->|Measurement / Unknown| normal["✅ Normal entity<br>enabled by default"]
-  role -->|Status / Info| diag["🔧 Diagnostic entity<br>disabled by default"]
-  role -->|Control / Feature| skip["⛔ No entity created"]
+  role -->|Status / Info / Control / Feature| diag["🔧 Diagnostic entity<br>disabled by default"]
 
   normal --> meta["Unit + device class<br>assigned from spec"]
   diag --> meta
 
   style normal fill:#4caf50,color:#fff
   style diag fill:#ff9800,color:#fff
-  style skip fill:#9e9e9e,color:#fff
 ```
 
 1. **Simple values** (a single number or string) become one sensor entity each

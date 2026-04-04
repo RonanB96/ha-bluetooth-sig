@@ -273,18 +273,19 @@ class TestEntityCreationFromSIGCharacteristicData:
         mock_config_entry: MagicMock,
         mock_bluetooth_service_info_csc_feature: BluetoothServiceInfoBleak,
     ) -> None:
-        """Test that CSC Feature is skipped because its role is FEATURE.
-
-        FEATURE-role characteristics describe device capabilities, not
-        measurable data, so they should not create sensor entities.
-        """
+        """CSC Feature is exposed as a diagnostic entity when parseable."""
         coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
         result = coordinator.update_device(mock_bluetooth_service_info_csc_feature)
 
-        # CSC Feature has role=FEATURE and should be gated out entirely
-        assert result is None or not any(
-            "2a5c" in str(k.key).lower() for k in result.entity_data
-        )
+        assert result is not None
+
+        csc_keys = [k for k in result.entity_data if "2a5c" in str(k.key).lower()]
+        assert csc_keys
+
+        csc_key = csc_keys[0]
+        desc = result.entity_descriptions[csc_key]
+        assert desc.entity_category is not None
+        assert desc.entity_registry_enabled_default is False
 
     def test_body_sensor_location_creates_entity(
         self,

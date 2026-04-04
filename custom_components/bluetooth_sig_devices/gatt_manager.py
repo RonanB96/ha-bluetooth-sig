@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -193,6 +194,13 @@ class GATTManager:
             # Count parseable characteristics
             supported_uuids: list[BluetoothUUID] = []
             parseable_count = 0
+            characteristic_properties: dict[str, GattProperty] = {}
+
+            manager = device.connection_manager
+            if isinstance(manager, HomeAssistantBluetoothAdapter):
+                characteristic_properties = (
+                    manager.get_characteristic_properties_snapshot()
+                )
 
             for service in services:
                 try:
@@ -270,6 +278,7 @@ class GATTManager:
                 name=service_info.name,
                 parseable_count=parseable_count,
                 supported_char_uuids=tuple(supported_uuids),
+                characteristic_properties=characteristic_properties,
             )
 
             self.probe_results[address] = result

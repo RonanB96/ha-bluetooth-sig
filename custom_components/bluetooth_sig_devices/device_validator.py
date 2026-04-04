@@ -7,9 +7,10 @@ and the ``GATTProbeResult`` data container used by the GATT manager.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from bluetooth_sig.types.gatt_enums import GattProperty
 from bluetooth_sig.types.uuid import BluetoothUUID
 
 from .const import STATIC_ADDRESS_TYPES, BLEAddress, BLEAddressType
@@ -27,6 +28,11 @@ _EPHEMERAL_ADDRESS_TYPES: frozenset[BLEAddressType] = frozenset(
         BLEAddressType.NON_RESOLVABLE_PRIVATE,
     }
 )
+
+
+def _empty_characteristic_properties() -> dict[str, GattProperty]:
+    """Return an empty characteristic-property mapping."""
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +167,9 @@ class GATTProbeResult:
     parseable_count: int = 0
     supported_char_uuids: tuple[BluetoothUUID, ...] = ()
     manufacturer_name: str | None = None
+    characteristic_properties: dict[str, GattProperty] = field(
+        default_factory=_empty_characteristic_properties
+    )
 
     def has_support(self) -> bool:
         """Check if device has any parseable characteristics."""

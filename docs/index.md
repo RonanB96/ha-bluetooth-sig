@@ -53,7 +53,7 @@ The integration is currently **read-only** — it monitors and measures, but doe
 
 Support for **writing to writable Bluetooth characteristics** is planned. When implemented, characteristics with Control and Feature roles (e.g., resetting an energy counter or setting an alert level) will become actionable Home Assistant entities such as buttons, number inputs, and selects. This will require new entity platforms beyond the current sensor-only approach.
 
-Until then, Control and Feature characteristics are not exposed as entities. See [Characteristic Roles](explanation/roles.md) for details.
+Until then, Control and Feature characteristics can appear as diagnostic sensors when readable, but write actions are not exposed. See [Characteristic Roles](explanation/roles.md) for details.
 
 ## Documentation
 

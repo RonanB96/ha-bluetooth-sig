@@ -33,8 +33,7 @@ The role determines whether the integration creates an entity and what kind of e
 flowchart LR
   char(["Characteristic"]) --> role{"Role?"}
   role -->|Measurement<br>Unknown| vis["Normal entity<br>enabled by default"]
-  role -->|Status<br>Info| diag["Diagnostic entity<br>disabled by default"]
-  role -->|Control<br>Feature| skip["No entity created"]
+  role -->|Status<br>Info<br>Control<br>Feature| diag["Diagnostic entity<br>disabled by default"]
 
   style vis fill:#4caf50,color:#fff
   style diag fill:#ff9800,color:#fff
@@ -57,7 +56,10 @@ To enable a diagnostic entity:
 
 ### Control and Feature roles
 
-These **do not** produce entities. Control characteristics are write-only command interfaces (e.g., resetting an energy counter), and Feature characteristics describe device capabilities (e.g., which blood pressure features are supported). Neither can be meaningfully represented as a read-only sensor.
+These are handled as **diagnostic entities when a readable value is available**.
+
+- **Control** characteristics are usually write-oriented and may fail reads on many devices. If readable, a diagnostic entity is created; if not readable, the read is skipped and no value entity is produced for that cycle. Writing to these characteristics is not yet supported — see [Planned features](../index.md#planned-features).
+- **Feature** characteristics typically expose capability flags and are surfaced as diagnostic entities (disabled by default).
 
 > See [Future: writable support](#future-writable-support) for how this will change.
 
@@ -69,7 +71,7 @@ Multi-field characteristics (like Heart Rate Measurement, which contains heart r
 
 ## Future: writable support
 
-Currently, the integration is **read-only** — it monitors and measures but does not control devices. Characteristics with **Control** and **Feature** roles are skipped because they cannot be represented as read-only sensor entities.
+Currently, the integration is **read-only** — it monitors and measures but does not control devices. Characteristics with **Control** and **Feature** roles are represented as diagnostic sensors when readable, but no write actions are exposed.
 
 Support for **writing to writable characteristics** is planned. When implemented:
 

@@ -63,6 +63,7 @@ from .const import (
     GATTProbeSnapshotData,
 )
 from .data_pipeline import update_device as _update_device_pipeline
+from .device_adapter import serialise_gatt_properties
 from .device_validator import is_static_address
 from .discovery_orchestrator import DiscoveryOrchestrator
 from .discovery_tracker import DiscoveryTracker
@@ -587,6 +588,10 @@ class BluetoothSIGCoordinator:
                 parseable_characteristics=result.parseable_count,
                 has_support=result.has_support(),
                 probe_failures=gatt.probe_failures.get(addr, 0),
+                characteristic_properties={
+                    uuid: serialise_gatt_properties(properties)
+                    for uuid, properties in result.characteristic_properties.items()
+                },
             )
 
         return DiagnosticsSnapshot(
