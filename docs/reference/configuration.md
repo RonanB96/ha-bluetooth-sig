@@ -56,11 +56,3 @@ See [Configure device-specific options](../how-to/configure-device-options.md) f
 ## IoT class
 
 `local_push` — the integration receives data locally via Bluetooth advertisements pushed by devices. No cloud connectivity is used.
-
-## Dependencies
-
-| Package                              | Purpose                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------- |
-| `bluetooth-sig` (≥0.2.0)             | GATT characteristic parsing, registry lookups, manufacturer data interpretation |
-| `bleak-retry-connector` (≥3.0.0)     | Resilient BLE GATT connections with automatic retries                           |
-| `homeassistant.components.bluetooth` | Home Assistant's Bluetooth scanner and callback infrastructure                  |

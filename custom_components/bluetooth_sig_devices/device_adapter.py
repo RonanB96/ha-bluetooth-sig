@@ -365,7 +365,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                 self._mtu_size,
             )
         except BleakError as err:
-            _LOGGER.warning("Failed to connect to %s: %s", self._address, err)
+            _LOGGER.debug("Failed to connect to %s: %s", self._address, err)
             self._is_connected = False
             self._client = None
             raise
@@ -382,7 +382,7 @@ class HomeAssistantBluetoothAdapter(ClientManagerProtocol):
                     await self._client.disconnect()
                     _LOGGER.debug("Disconnected from %s", self._address)
             except BleakError as err:
-                _LOGGER.warning("Error disconnecting from %s: %s", self._address, err)
+                _LOGGER.debug("Error disconnecting from %s: %s", self._address, err)
             finally:
                 self._client = None
                 self._is_connected = False

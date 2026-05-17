@@ -22,6 +22,7 @@ from bluetooth_sig import is_struct_value, to_primitive
 from bluetooth_sig.device.device import Device
 from bluetooth_sig.gatt.characteristics.base import BaseCharacteristic
 from bluetooth_sig.gatt.characteristics.registry import CharacteristicRegistry
+from bluetooth_sig.gatt.exceptions import SpecialValueDetectedError
 from bluetooth_sig.types.gatt_enums import CharacteristicName, CharacteristicRole
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth.passive_update_processor import (
@@ -75,18 +76,55 @@ async def build_gatt_entities(
     for use in discovery flow metadata.
     """
     for char_uuid in probe_result.supported_char_uuids:
+        special_value_meaning: str | None = None
         try:
             parsed_value = await asyncio.wait_for(
                 device.read(str(char_uuid)),
                 timeout=DEFAULT_READ_TIMEOUT,
             )
-            if parsed_value is None:
+        except SpecialValueDetectedError as err:
+            # Well-formed read returning a SIG sentinel (e.g. "value is
+            # not known", "NaN"). Per the SIG spec this is a valid
+            # reading meaning the sensor has no current sample — not
+            # a parse failure. Still build the entity so the device
+            # and entity registry rows get created; the state will be
+            # ``unknown`` until a real value is read.
+            #
+            # Logged at WARNING because special values are an
+            # exceptional condition the operator should be aware of
+            # (the SIG spec defines them precisely so they are
+            # surfaced rather than hidden).
+            parsed_value = None
+            special_value_meaning = err.special_value.meaning
+            _LOGGER.debug(
+                "Characteristic %s (%s) on %s returned SIG special value "
+                "(%s); entity will report 'unknown' until a real reading "
+                "is available",
+                err.name,
+                char_uuid.short_form,
+                address,
+                special_value_meaning,
+            )
+        except Exception as err:
+            _LOGGER.debug(
+                "Failed to read characteristic %s from %s: %s",
+                char_uuid.short_form,
+                address,
+                err,
+            )
+            continue
+
+        try:
+            if parsed_value is None and special_value_meaning is None:
+                # device.read() returned None with no exception — nothing
+                # to publish for this characteristic.
                 continue
 
             # Capture manufacturer name from GATT — only during
             # initial probe, not on every poll cycle.
             if (
-                capture_manufacturer
+                parsed_value is not None
+                and capture_manufacturer
                 and _MANUFACTURER_NAME_UUID is not None
                 and char_uuid == _MANUFACTURER_NAME_UUID
                 and isinstance(parsed_value, str)
@@ -110,7 +148,22 @@ async def build_gatt_entities(
             role: CharacteristicRole = char_instance.role
             is_diagnostic = role in DIAGNOSTIC_ROLES
 
-            if is_struct_value(parsed_value):
+            if parsed_value is None:
+                # SIG special value — emit a simple entity with no
+                # current value so HA shows ``unknown`` rather than
+                # hiding the sensor entirely.
+                add_simple_entity(
+                    None,
+                    f"gatt_{char_uuid.short_form}",
+                    char_name,
+                    None,  # type: ignore[arg-type]
+                    char_unit,
+                    is_diagnostic,
+                    entity_descriptions,
+                    entity_names,
+                    entity_data,
+                )
+            elif is_struct_value(parsed_value):
                 add_struct_entities(
                     None,
                     f"gatt_{char_uuid.short_form}",
@@ -137,8 +190,8 @@ async def build_gatt_entities(
                 )
 
         except Exception as err:
-            _LOGGER.warning(
-                "Failed to read characteristic %s from %s: %s",
+            _LOGGER.debug(
+                "Failed to build entity for characteristic %s from %s: %s",
                 char_uuid.short_form,
                 address,
                 err,
@@ -218,14 +271,14 @@ async def poll_gatt_characteristics(
         )
 
     except Exception as err:
-        _LOGGER.warning("Failed to poll GATT from %s: %s", address, err)
+        _LOGGER.debug("Failed to poll GATT from %s: %s", address, err)
         return None
 
     finally:
         try:
             await device.disconnect()
         except Exception as disc_err:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "Disconnect failed after polling %s: %s",
                 address,
                 disc_err,
