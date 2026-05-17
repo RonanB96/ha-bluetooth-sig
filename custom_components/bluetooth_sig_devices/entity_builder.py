@@ -309,9 +309,8 @@ def add_sig_characteristic_entity(
     Uses the characteristic's ``role`` property to decide whether and
     how to create entities:
 
-    - CONTROL / FEATURE → skipped (not useful as HA sensor entities)
     - MEASUREMENT       → sensor entities (state_class=MEASUREMENT)
-    - STATUS / INFO     → diagnostic entities
+    - STATUS / INFO / CONTROL / FEATURE → diagnostic entities (disabled by default)
     - UNKNOWN           → fall back to value-type heuristic
     """
     # Get characteristic class and metadata from registry
