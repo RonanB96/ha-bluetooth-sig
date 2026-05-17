@@ -127,6 +127,57 @@ class GATTManager:
         ] = {}
         # Monotonic timestamp of last probe attempt for confirmed devices
         self._confirmed_probe_last_attempt: dict[BLEAddress, float] = {}
+        # Confirmed devices already logged as unavailable for GATT probing
+        self._confirmed_probe_unavailable_logged: set[BLEAddress] = set()
+        # Addresses whose last probe attempt failed rather than returning no support
+        self._last_probe_error: dict[BLEAddress, str] = {}
+
+    def _is_confirmed_device(self, address: BLEAddress) -> bool:
+        """Return True when the address belongs to a confirmed device."""
+        return self._coordinator.has_config_entry(address)
+
+    def _log_probe_failure(self, address: BLEAddress, message: str, *args: object) -> None:
+        """Log probe failure without spamming confirmed-device retries."""
+        rendered_args = (address, *args)
+        rendered_message = message % rendered_args
+        if self._is_confirmed_device(address):
+            if address not in self._confirmed_probe_unavailable_logged:
+                _LOGGER.warning(
+                    "Bluetooth device %s is unavailable for GATT probing: %s",
+                    address,
+                    rendered_message,
+                )
+                self._confirmed_probe_unavailable_logged.add(address)
+                return
+
+            _LOGGER.debug("%s", rendered_message)
+            return
+
+        _LOGGER.debug("%s", rendered_message)
+
+    def _log_probe_success(self, address: BLEAddress, parseable_count: int) -> None:
+        """Log probe success or recovery depending on prior failure state."""
+        if self._is_confirmed_device(address):
+            if address in self._confirmed_probe_unavailable_logged:
+                _LOGGER.info(
+                    "Bluetooth device %s is back online for GATT probing",
+                    address,
+                )
+                self._confirmed_probe_unavailable_logged.discard(address)
+                return
+
+            _LOGGER.debug(
+                "GATT probe successful for %s: %d parseable characteristics",
+                address,
+                parseable_count,
+            )
+            return
+
+        _LOGGER.info(
+            "GATT probe successful for %s: %d parseable characteristics",
+            address,
+            parseable_count,
+        )
 
     # ------------------------------------------------------------------
     # Properties for diagnostics / external access
@@ -185,6 +236,7 @@ class GATTManager:
             )
 
         device = coord.devices[address]
+        self._last_probe_error.pop(address, None)
 
         try:
             # Connect and discover services using library's Device class
@@ -314,9 +366,10 @@ class GATTManager:
 
         except Exception as err:
             self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-            _LOGGER.warning(
-                "Failed to probe device %s (attempt %d/%d): %s",
+            self._last_probe_error[address] = str(err)
+            self._log_probe_failure(
                 address,
+                "Failed to probe device %s (attempt %d/%d): %s",
                 self.probe_failures[address],
                 self._max_probe_retries,
                 err,
@@ -367,13 +420,13 @@ class GATTManager:
                 )
 
                 if result and result.has_support():
-                    _LOGGER.info(
-                        "GATT probe successful for %s: %d parseable characteristics",
-                        address,
-                        result.parseable_count,
-                    )
+                    self._last_probe_error.pop(address, None)
+                    self._log_probe_success(address, result.parseable_count)
                     if self._on_probe_success is not None:
                         self._on_probe_success(address, result, service_info)
+                elif address in self._last_probe_error:
+                    if self._on_probe_failure is not None:
+                        self._on_probe_failure(address, service_info)
                 else:
                     _LOGGER.info(
                         "GATT probe for %s found no parseable characteristics",
@@ -381,9 +434,10 @@ class GATTManager:
                     )
             except TimeoutError:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.warning(
-                    "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
+                self._last_probe_error[address] = "timed out"
+                self._log_probe_failure(
                     address,
+                    "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
                     probe_timeout,
                     self.probe_failures[address],
                     self._max_probe_retries,
@@ -392,9 +446,10 @@ class GATTManager:
                     self._on_probe_failure(address, service_info)
             except Exception as err:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.warning(
-                    "GATT probe failed for %s: %s (attempt %d/%d)",
+                self._last_probe_error[address] = str(err)
+                self._log_probe_failure(
                     address,
+                    "GATT probe failed for %s: %s (attempt %d/%d)",
                     err,
                     self.probe_failures[address],
                     self._max_probe_retries,
@@ -534,6 +589,8 @@ class GATTManager:
         self.pending_probes.discard(address)
         self._initial_gatt_cache.pop(address, None)
         self._confirmed_probe_last_attempt.pop(address, None)
+        self._confirmed_probe_unavailable_logged.discard(address)
+        self._last_probe_error.pop(address, None)
         task = self._probe_tasks.pop(address, None)
         if task is not None:
             task.cancel()
