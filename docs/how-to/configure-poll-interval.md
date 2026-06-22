@@ -25,4 +25,8 @@ The change takes effect immediately — no restart is required.
 
 - Polling only applies to devices where the integration has successfully probed GATT characteristics during discovery.
 - Advertisement-only devices (non-connectable) are not affected by this setting — they update passively whenever they broadcast.
+- GATT polling uses **two triggers**:
+  - **Advertisement events** — polls promptly when a device returns to range and the interval has elapsed.
+  - **Per-device timer** — polls at the configured interval even when HA deduplicates unchanged advertisements (required for GATT-only devices such as Nordic Thingy:52).
+- Both triggers share the same poll debouncer, so overlapping requests are coalesced rather than duplicated.
 - The integration limits concurrent BLE connections (default: 2, configurable via hub options) to avoid radio contention — see [Configuration](../reference/configuration.md#hub-options).

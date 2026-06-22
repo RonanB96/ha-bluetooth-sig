@@ -43,6 +43,8 @@ This limit **does not apply to devices that have already been confirmed by the u
 
 Probing is limited to 2 concurrent connections (configurable) to avoid overwhelming the Bluetooth radio. In environments with many BLE devices, probes may be queued and slow.
 
+**Confirmed devices take priority.** When you have added at least one device, the integration reserves BLE connection capacity for confirmed-device GATT probes and polls. Auto-discovery probes of unknown devices are deferred or cancelled if they would contend with confirmed-device work. Discovery resumes when slots are available.
+
 ## GATT connection reliability
 
 BLE connections are inherently less reliable than Wi-Fi or Zigbee:

@@ -9,6 +9,7 @@ A Home Assistant custom integration that automatically creates sensors from Blue
 
 No hardcoded device maps — all parsing is fully library-driven. When the library adds support for a new characteristic, this integration picks it up automatically.
 
+> **Requires Home Assistant 2026.1.0 or later** — see [Configuration](docs/reference/configuration.md#constraints) for details.
 > This integration only supports standard Bluetooth SIG protocols. Devices using proprietary formats (BTHome, Xiaomi, etc.) require their own dedicated integrations.
 
 ## Installation

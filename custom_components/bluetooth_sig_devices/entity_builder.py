@@ -309,9 +309,8 @@ def add_sig_characteristic_entity(
     Uses the characteristic's ``role`` property to decide whether and
     how to create entities:
 
-    - CONTROL / FEATURE → skipped (not useful as HA sensor entities)
     - MEASUREMENT       → sensor entities (state_class=MEASUREMENT)
-    - STATUS / INFO     → diagnostic entities
+    - STATUS / INFO / CONTROL / FEATURE → diagnostic entities (disabled by default)
     - UNKNOWN           → fall back to value-type heuristic
     """
     # Get characteristic class and metadata from registry
@@ -457,9 +456,22 @@ def add_service_data_entities(
                 has_unit = bool(char_info.unit and char_info.unit.strip())
                 is_diagnostic = not has_unit
 
-            parsed_value = translator.parse_characteristic(
-                str(service_uuid), data, None
-            )
+            special_value_meaning: str | None = None
+            try:
+                parsed_value = translator.parse_characteristic(
+                    str(service_uuid), data, None
+                )
+            except SpecialValueDetectedError as svc_err:
+                parsed_value = None
+                special_value_meaning = svc_err.special_value.meaning
+                _LOGGER.warning(
+                    "Service data %s (%s) contains SIG special value "
+                    "(%s); entity will report 'unknown' until a real "
+                    "reading is available",
+                    char_info.name or service_uuid,
+                    service_uuid,
+                    special_value_meaning,
+                )
 
             entity_key = PassiveBluetoothEntityKey(
                 f"svc_{str(service_uuid).replace('-', '_')}", device_id
@@ -483,12 +495,9 @@ def add_service_data_entities(
             )
 
             entity_names[entity_key] = svc_name
-            entity_data[entity_key] = to_primitive(parsed_value)
-        except SpecialValueDetectedError:
-            _LOGGER.debug(
-                "Service data %s contains special sentinel value, skipping",
-                service_uuid,
-            )
+            if parsed_value is not None:
+                entity_data[entity_key] = to_primitive(parsed_value)
+            # else: leave entity_data unset so HA reports ``unknown``
         except (ValueError, TypeError, KeyError, AttributeError):
             _LOGGER.warning(
                 "Could not parse service data for %s",

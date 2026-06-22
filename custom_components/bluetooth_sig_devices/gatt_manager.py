@@ -34,8 +34,10 @@ from homeassistant.components.bluetooth.passive_update_processor import (
 from homeassistant.core import HomeAssistant
 
 from .const import (
+    CONF_DEVICE_ADDRESS,
     CONFIRMED_DEVICE_PROBE_BACKOFF,
     DEFAULT_CONNECTION_TIMEOUT,
+    DOMAIN,
     MAX_PROBE_FAILURES,
     BLEAddress,
 )
@@ -110,6 +112,7 @@ class GATTManager:
         self._max_probe_retries = max_probe_retries
         self._on_probe_success = on_probe_success
         self._on_probe_failure = on_probe_failure
+        self._max_concurrent_probes = max_concurrent_probes
 
         # GATT probe results cache
         self.probe_results: dict[BLEAddress, GATTProbeResult] = {}
@@ -127,6 +130,98 @@ class GATTManager:
         ] = {}
         # Monotonic timestamp of last probe attempt for confirmed devices
         self._confirmed_probe_last_attempt: dict[BLEAddress, float] = {}
+        # Confirmed devices already logged as unavailable for GATT probing
+        self._confirmed_probe_unavailable_logged: set[BLEAddress] = set()
+        # Addresses whose last probe attempt failed rather than returning no support
+        self._last_probe_error: dict[BLEAddress, str] = {}
+
+    def _is_confirmed_device(self, address: BLEAddress) -> bool:
+        """Return True when the address belongs to a confirmed device."""
+        return self._coordinator.has_config_entry(address)
+
+    def _has_confirmed_devices(self) -> bool:
+        """Return True when at least one user-confirmed device entry exists."""
+        return any(
+            entry.unique_id is not None and CONF_DEVICE_ADDRESS in entry.data
+            for entry in self._hass.config_entries.async_entries(DOMAIN)
+        )
+
+    def _unconfirmed_probes_in_flight(self) -> int:
+        """Count in-flight GATT probes for unconfirmed (discovery) devices."""
+        return sum(
+            1
+            for address in self.pending_probes
+            if not self._is_confirmed_device(address)
+        )
+
+    def _max_concurrent_unconfirmed_probes(self) -> int:
+        """Discovery probe cap — reserve capacity when confirmed devices exist."""
+        if not self._has_confirmed_devices():
+            return self._max_concurrent_probes
+        return max(0, self._max_concurrent_probes - 1)
+
+    def _cancel_unconfirmed_probe_tasks(self) -> None:
+        """Cancel discovery probes so confirmed-device GATT work can proceed."""
+        for address in list(self._probe_tasks):
+            if self._is_confirmed_device(address):
+                continue
+            task = self._probe_tasks.pop(address)
+            self.pending_probes.discard(address)
+            if not task.done():
+                task.cancel()
+                _LOGGER.debug(
+                    "Cancelled discovery probe for %s — confirmed device priority",
+                    address,
+                )
+
+    def _prioritize_confirmed_gatt(self) -> None:
+        """Preempt discovery GATT work when a confirmed device needs a connection."""
+        self._cancel_unconfirmed_probe_tasks()
+
+    def _log_probe_failure(
+        self, address: BLEAddress, message: str, *args: object
+    ) -> None:
+        """Log probe failure without spamming confirmed-device retries."""
+        rendered_args = (address, *args)
+        rendered_message = message % rendered_args
+        if self._is_confirmed_device(address):
+            if address not in self._confirmed_probe_unavailable_logged:
+                _LOGGER.warning(
+                    "Bluetooth device %s is unavailable for GATT probing: %s",
+                    address,
+                    rendered_message,
+                )
+                self._confirmed_probe_unavailable_logged.add(address)
+                return
+
+            _LOGGER.debug("%s", rendered_message)
+            return
+
+        _LOGGER.debug("%s", rendered_message)
+
+    def _log_probe_success(self, address: BLEAddress, parseable_count: int) -> None:
+        """Log probe success or recovery depending on prior failure state."""
+        if self._is_confirmed_device(address):
+            if address in self._confirmed_probe_unavailable_logged:
+                _LOGGER.info(
+                    "Bluetooth device %s is back online for GATT probing",
+                    address,
+                )
+                self._confirmed_probe_unavailable_logged.discard(address)
+                return
+
+            _LOGGER.debug(
+                "GATT probe successful for %s: %d parseable characteristics",
+                address,
+                parseable_count,
+            )
+            return
+
+        _LOGGER.info(
+            "GATT probe successful for %s: %d parseable characteristics",
+            address,
+            parseable_count,
+        )
 
     # ------------------------------------------------------------------
     # Properties for diagnostics / external access
@@ -185,6 +280,7 @@ class GATTManager:
             )
 
         device = coord.devices[address]
+        self._last_probe_error.pop(address, None)
 
         try:
             # Connect and discover services using library's Device class
@@ -314,9 +410,10 @@ class GATTManager:
 
         except Exception as err:
             self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-            _LOGGER.warning(
-                "Failed to probe device %s (attempt %d/%d): %s",
+            self._last_probe_error[address] = str(err)
+            self._log_probe_failure(
                 address,
+                "Failed to probe device %s (attempt %d/%d): %s",
                 self.probe_failures[address],
                 self._max_probe_retries,
                 err,
@@ -367,13 +464,13 @@ class GATTManager:
                 )
 
                 if result and result.has_support():
-                    _LOGGER.info(
-                        "GATT probe successful for %s: %d parseable characteristics",
-                        address,
-                        result.parseable_count,
-                    )
+                    self._last_probe_error.pop(address, None)
+                    self._log_probe_success(address, result.parseable_count)
                     if self._on_probe_success is not None:
                         self._on_probe_success(address, result, service_info)
+                elif address in self._last_probe_error:
+                    if self._on_probe_failure is not None:
+                        self._on_probe_failure(address, service_info)
                 else:
                     _LOGGER.info(
                         "GATT probe for %s found no parseable characteristics",
@@ -381,9 +478,10 @@ class GATTManager:
                     )
             except TimeoutError:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.warning(
-                    "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
+                self._last_probe_error[address] = "timed out"
+                self._log_probe_failure(
                     address,
+                    "GATT probe timed out for %s after %.0fs (attempt %d/%d)",
                     probe_timeout,
                     self.probe_failures[address],
                     self._max_probe_retries,
@@ -392,9 +490,10 @@ class GATTManager:
                     self._on_probe_failure(address, service_info)
             except Exception as err:
                 self.probe_failures[address] = self.probe_failures.get(address, 0) + 1
-                _LOGGER.warning(
-                    "GATT probe failed for %s: %s (attempt %d/%d)",
+                self._last_probe_error[address] = str(err)
+                self._log_probe_failure(
                     address,
+                    "GATT probe failed for %s: %s (attempt %d/%d)",
                     err,
                     self.probe_failures[address],
                     self._max_probe_retries,
@@ -451,6 +550,8 @@ class GATTManager:
         if cached is not None:
             _LOGGER.debug("Returning cached initial GATT data for %s", address)
             return cached
+        if self._is_confirmed_device(address):
+            self._prioritize_confirmed_gatt()
         async with self._probe_semaphore:
             return await self.async_poll_gatt_characteristics(address)
 
@@ -483,6 +584,24 @@ class GATTManager:
         address = service_info.address
         if address in self.probe_results or address in self.pending_probes:
             return
+        if any(
+            self._is_confirmed_device(pending_address)
+            for pending_address in self.pending_probes
+        ):
+            _LOGGER.debug(
+                "Deferring discovery probe for %s — confirmed GATT probe in progress",
+                address,
+            )
+            return
+        if (
+            self._unconfirmed_probes_in_flight()
+            >= self._max_concurrent_unconfirmed_probes()
+        ):
+            _LOGGER.debug(
+                "Deferring discovery probe for %s — reserving capacity for confirmed devices",
+                address,
+            )
+            return
         self._create_probe_task(service_info)
 
     def schedule_probe_for_confirmed_device(
@@ -508,6 +627,7 @@ class GATTManager:
                 return
 
         self._confirmed_probe_last_attempt[address] = time.monotonic()
+        self._prioritize_confirmed_gatt()
         self._create_probe_task(service_info)
 
     def is_failures_exhausted(self, address: BLEAddress) -> bool:
@@ -534,6 +654,8 @@ class GATTManager:
         self.pending_probes.discard(address)
         self._initial_gatt_cache.pop(address, None)
         self._confirmed_probe_last_attempt.pop(address, None)
+        self._confirmed_probe_unavailable_logged.discard(address)
+        self._last_probe_error.pop(address, None)
         task = self._probe_tasks.pop(address, None)
         if task is not None:
             task.cancel()
