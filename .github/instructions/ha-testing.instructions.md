@@ -1,6 +1,8 @@
 ---
-description: "Use when writing, modifying, or debugging tests for the Bluetooth SIG Devices integration. Covers test tiers, key helpers, fixture format, and BLE injection patterns."
+description: "Test tiers, helpers, fixtures, and BLE injection patterns"
 applyTo: "tests/**/*.py"
+globs: tests/**/*.py
+alwaysApply: false
 ---
 
 # HA Testing — Tiers, Helpers & Fixtures

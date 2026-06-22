@@ -1339,6 +1339,7 @@ class TestNotifyProbeComplete:
         coordinator.notify_probe_complete(address)
 
         mock_proc._debounced_poll.async_schedule_call.assert_called_once()
+        mock_proc.needs_poll.assert_not_called()
 
     def test_noop_when_no_processor(
         self,
@@ -1367,6 +1368,158 @@ class TestNotifyProbeComplete:
         coordinator.notify_probe_complete(address)
 
         mock_proc._debounced_poll.async_schedule_call.assert_not_called()
+
+
+class TestGattPollTimer:
+    """Test per-device GATT poll timer for steady-state polling."""
+
+    @staticmethod
+    def _make_device_entry(**opts: object) -> MagicMock:
+        entry = MagicMock(spec=ConfigEntry)
+        entry.data = {"address": "AA:BB:CC:DD:EE:01"}
+        entry.options = dict(opts)
+        return entry
+
+    def test_start_timer_on_create_device_processor(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """create_device_processor should start a GATT poll timer."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=120
+        )
+        address = "AA:BB:CC:DD:EE:01"
+        dev_entry = self._make_device_entry()
+
+        with (
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".ActiveBluetoothProcessorCoordinator"
+            ) as mock_abpc,
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".PassiveBluetoothDataProcessor"
+            ),
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".async_track_time_interval"
+            ) as mock_track,
+        ):
+            mock_abpc.return_value = MagicMock()
+            coordinator.create_device_processor(
+                address, dev_entry, MagicMock(), MagicMock()
+            )
+
+        mock_track.assert_called_once()
+        assert mock_track.call_args[0][2].total_seconds() == 120
+        assert address in coordinator._gatt_poll_cancel
+
+    def test_timer_uses_device_poll_interval_override(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Timer interval should honour per-device poll override."""
+        coordinator = BluetoothSIGCoordinator(
+            mock_hass, mock_config_entry, poll_interval=300
+        )
+        address = "AA:BB:CC:DD:EE:01"
+        dev_entry = self._make_device_entry(device_poll_interval=60)
+
+        with (
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".ActiveBluetoothProcessorCoordinator"
+            ) as mock_abpc,
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".PassiveBluetoothDataProcessor"
+            ),
+            patch(
+                "custom_components.bluetooth_sig_devices.coordinator"
+                ".async_track_time_interval"
+            ) as mock_track,
+        ):
+            mock_abpc.return_value = MagicMock()
+            coordinator.create_device_processor(
+                address, dev_entry, MagicMock(), MagicMock()
+            )
+
+        assert mock_track.call_args[0][2].total_seconds() == 60
+
+    def test_timer_schedules_poll_when_due(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Timer callback should schedule poll when needs_poll returns True."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        address = "AA:BB:CC:DD:EE:01"
+
+        mock_proc = MagicMock()
+        mock_proc._last_service_info = MagicMock()
+        mock_proc.needs_poll.return_value = True
+        mock_proc._debounced_poll = MagicMock()
+        coordinator._processor_coordinators[address] = mock_proc
+
+        coordinator._schedule_gatt_poll(address)
+
+        mock_proc.needs_poll.assert_called_once_with(mock_proc._last_service_info)
+        mock_proc._debounced_poll.async_schedule_call.assert_called_once()
+
+    def test_timer_skips_poll_when_not_due(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """Timer callback should skip poll when needs_poll returns False."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        address = "AA:BB:CC:DD:EE:01"
+
+        mock_proc = MagicMock()
+        mock_proc._last_service_info = MagicMock()
+        mock_proc.needs_poll.return_value = False
+        mock_proc._debounced_poll = MagicMock()
+        coordinator._processor_coordinators[address] = mock_proc
+
+        coordinator._schedule_gatt_poll(address)
+
+        mock_proc._debounced_poll.async_schedule_call.assert_not_called()
+
+    def test_remove_device_cancels_timer(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """remove_device should cancel the GATT poll timer."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        address = "AA:BB:CC:DD:EE:01"
+        mock_cancel = MagicMock()
+        coordinator._gatt_poll_cancel[address] = mock_cancel
+
+        coordinator.remove_device(address)
+
+        mock_cancel.assert_called_once()
+        assert address not in coordinator._gatt_poll_cancel
+
+    async def test_async_stop_cancels_all_timers(
+        self,
+        mock_hass: MagicMock,
+        mock_config_entry: MagicMock,
+    ) -> None:
+        """async_stop should cancel all GATT poll timers."""
+        coordinator = BluetoothSIGCoordinator(mock_hass, mock_config_entry)
+        cancel_a = MagicMock()
+        cancel_b = MagicMock()
+        coordinator._gatt_poll_cancel["AA:BB:CC:DD:EE:01"] = cancel_a
+        coordinator._gatt_poll_cancel["AA:BB:CC:DD:EE:02"] = cancel_b
+
+        await coordinator.async_stop()
+
+        cancel_a.assert_called_once()
+        cancel_b.assert_called_once()
+        assert coordinator._gatt_poll_cancel == {}
 
 
 class TestAsyncStop:

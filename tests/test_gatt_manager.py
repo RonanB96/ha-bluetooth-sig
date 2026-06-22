@@ -259,6 +259,71 @@ class TestScheduleProbe:
         mock_hass.async_create_task.assert_called_once()
 
 
+class TestConfirmedDeviceGattPriority:
+    """Tests for confirmed-device priority over discovery GATT probes."""
+
+    def test_schedule_probe_deferred_when_confirmed_probe_in_flight(self) -> None:
+        """Discovery probes wait while a confirmed-device probe is in progress."""
+        mock_hass = MagicMock()
+        coord = _make_coordinator(mock_hass)
+        gatt = coord.gatt_manager
+        confirmed = "11:22:33:44:55:66"
+
+        coord.has_config_entry = MagicMock(side_effect=lambda addr: addr == confirmed)
+        gatt.pending_probes.add(confirmed)
+
+        gatt.schedule_probe(_make_service_info(address="AA:BB:CC:DD:EE:FF"))
+
+        mock_hass.async_create_task.assert_not_called()
+
+    def test_schedule_probe_deferred_at_unconfirmed_cap(self) -> None:
+        """Reserve one connection slot for confirmed devices when any exist."""
+        mock_hass = MagicMock()
+        device_entry = MagicMock()
+        device_entry.unique_id = "11:22:33:44:55:66"
+        device_entry.data = {"address": "11:22:33:44:55:66"}
+        mock_hass.config_entries.async_entries.return_value = [device_entry]
+
+        coord = _make_coordinator(mock_hass)
+        gatt = coord.gatt_manager
+        coord.has_config_entry = MagicMock(return_value=False)
+        gatt._max_concurrent_probes = 2
+        gatt.pending_probes.add("AA:BB:CC:DD:EE:01")
+
+        gatt.schedule_probe(_make_service_info(address="AA:BB:CC:DD:EE:02"))
+
+        mock_hass.async_create_task.assert_not_called()
+
+    def test_confirmed_probe_cancels_unconfirmed_tasks(self) -> None:
+        """Confirmed-device probes preempt in-flight discovery probes."""
+        mock_hass = MagicMock()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+
+        def _capture_and_close(coro, *args, **kwargs):
+            coro.close()
+            return MagicMock()
+
+        mock_hass.async_create_task.side_effect = _capture_and_close
+
+        coord = _make_coordinator(mock_hass)
+        gatt = coord.gatt_manager
+        discovery = "AA:BB:CC:DD:EE:FF"
+        confirmed = "11:22:33:44:55:66"
+
+        coord.has_config_entry = MagicMock(side_effect=lambda addr: addr == confirmed)
+        gatt.pending_probes.add(discovery)
+        gatt._probe_tasks[discovery] = mock_task
+
+        gatt.schedule_probe_for_confirmed_device(
+            _make_service_info(address=confirmed)
+        )
+
+        mock_task.cancel.assert_called_once()
+        assert discovery not in gatt.pending_probes
+        mock_hass.async_create_task.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # async_poll_gatt_characteristics
 # ---------------------------------------------------------------------------

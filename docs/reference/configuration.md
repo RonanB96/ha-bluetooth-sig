@@ -46,12 +46,25 @@ See [Configure device-specific options](../how-to/configure-device-options.md) f
 
 | Constraint                             | Value                                |
 | -------------------------------------- | ------------------------------------ |
-| Minimum Home Assistant version         | 2026.1.0                             |
+| Minimum Home Assistant version         | 2026.1.0 (see note below)            |
 | Bluetooth scanning mode                | Passive                              |
 | Maximum concurrent GATT connections    | Configurable (default 2, range 1–5)  |
 | Maximum tracked devices                | 2,048 (seen), 4,096 (rejected)       |
 | Stale device timeout                   | Configurable (default 1 hour)        |
 | Maximum GATT probe attempts per device | Configurable (default 3, range 1–10) |
+
+### Minimum Home Assistant version
+
+**2026.1.0** is required. This is declared in `manifest.json`, `hacs.json`, and enforced by HACS at install time.
+
+The integration targets the 2026.1+ Bluetooth processor APIs:
+
+- `ActiveBluetoothProcessorCoordinator` with `needs_poll_method` / `poll_method` for GATT reads
+- `PassiveBluetoothEntityKey` and passive processor entity restore
+- Config entry `runtime_data` for hub/device coordinator sharing
+- `after_dependencies: ["bluetooth_adapters"]` so remote BLE proxies are ready before setup
+
+Development and CI use Python 3.12+ (`pyproject.toml`), matching Home Assistant 2026.1.
 
 ## IoT class
 

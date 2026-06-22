@@ -35,7 +35,9 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONFIRMED_DEVICE_PROBE_BACKOFF,
+    CONF_DEVICE_ADDRESS,
     DEFAULT_CONNECTION_TIMEOUT,
+    DOMAIN,
     MAX_PROBE_FAILURES,
     BLEAddress,
 )
@@ -110,6 +112,7 @@ class GATTManager:
         self._max_probe_retries = max_probe_retries
         self._on_probe_success = on_probe_success
         self._on_probe_failure = on_probe_failure
+        self._max_concurrent_probes = max_concurrent_probes
 
         # GATT probe results cache
         self.probe_results: dict[BLEAddress, GATTProbeResult] = {}
@@ -135,6 +138,43 @@ class GATTManager:
     def _is_confirmed_device(self, address: BLEAddress) -> bool:
         """Return True when the address belongs to a confirmed device."""
         return self._coordinator.has_config_entry(address)
+
+    def _has_confirmed_devices(self) -> bool:
+        """Return True when at least one user-confirmed device entry exists."""
+        return any(
+            entry.unique_id is not None and CONF_DEVICE_ADDRESS in entry.data
+            for entry in self._hass.config_entries.async_entries(DOMAIN)
+        )
+
+    def _unconfirmed_probes_in_flight(self) -> int:
+        """Count in-flight GATT probes for unconfirmed (discovery) devices."""
+        return sum(
+            1 for address in self.pending_probes if not self._is_confirmed_device(address)
+        )
+
+    def _max_concurrent_unconfirmed_probes(self) -> int:
+        """Discovery probe cap — reserve capacity when confirmed devices exist."""
+        if not self._has_confirmed_devices():
+            return self._max_concurrent_probes
+        return max(0, self._max_concurrent_probes - 1)
+
+    def _cancel_unconfirmed_probe_tasks(self) -> None:
+        """Cancel discovery probes so confirmed-device GATT work can proceed."""
+        for address in list(self._probe_tasks):
+            if self._is_confirmed_device(address):
+                continue
+            task = self._probe_tasks.pop(address)
+            self.pending_probes.discard(address)
+            if not task.done():
+                task.cancel()
+                _LOGGER.debug(
+                    "Cancelled discovery probe for %s — confirmed device priority",
+                    address,
+                )
+
+    def _prioritize_confirmed_gatt(self) -> None:
+        """Preempt discovery GATT work when a confirmed device needs a connection."""
+        self._cancel_unconfirmed_probe_tasks()
 
     def _log_probe_failure(self, address: BLEAddress, message: str, *args: object) -> None:
         """Log probe failure without spamming confirmed-device retries."""
@@ -506,6 +546,8 @@ class GATTManager:
         if cached is not None:
             _LOGGER.debug("Returning cached initial GATT data for %s", address)
             return cached
+        if self._is_confirmed_device(address):
+            self._prioritize_confirmed_gatt()
         async with self._probe_semaphore:
             return await self.async_poll_gatt_characteristics(address)
 
@@ -538,6 +580,24 @@ class GATTManager:
         address = service_info.address
         if address in self.probe_results or address in self.pending_probes:
             return
+        if any(
+            self._is_confirmed_device(pending_address)
+            for pending_address in self.pending_probes
+        ):
+            _LOGGER.debug(
+                "Deferring discovery probe for %s — confirmed GATT probe in progress",
+                address,
+            )
+            return
+        if (
+            self._unconfirmed_probes_in_flight()
+            >= self._max_concurrent_unconfirmed_probes()
+        ):
+            _LOGGER.debug(
+                "Deferring discovery probe for %s — reserving capacity for confirmed devices",
+                address,
+            )
+            return
         self._create_probe_task(service_info)
 
     def schedule_probe_for_confirmed_device(
@@ -563,6 +623,7 @@ class GATTManager:
                 return
 
         self._confirmed_probe_last_attempt[address] = time.monotonic()
+        self._prioritize_confirmed_gatt()
         self._create_probe_task(service_info)
 
     def is_failures_exhausted(self, address: BLEAddress) -> bool:

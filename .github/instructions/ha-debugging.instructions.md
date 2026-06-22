@@ -1,5 +1,6 @@
 ---
-description: "Use when building, linting, running tests, or debugging a live Home Assistant instance. Covers local dev commands and HA Docker debugging workflow."
+description: "Build, lint, test, and live Home Assistant debugging commands"
+alwaysApply: false
 ---
 
 # HA Debugging — Build Commands & Live HA

@@ -1,5 +1,7 @@
 ---
+description: "Bluetooth SIG Devices — core agent instructions for architecture, rules, and conventions"
 applyTo: '**'
+alwaysApply: true
 ---
 
 # Bluetooth SIG Devices — AI Agent Instructions
@@ -43,6 +45,8 @@ When a workaround is needed due to a limitation in `bluetooth-sig-python`:
 3. Open a GitHub issue on the library repo if significant
 
 ## Sub-Instructions
+
+These files are the source of truth for both GitHub Copilot and Cursor. Cursor loads them via symlinks in `.cursor/rules/`.
 
 - `.github/instructions/ha-integration.instructions.md` — component map, data flow, key patterns, constraints (`custom_components/**/*.py`)
 - `.github/instructions/ha-testing.instructions.md` — test tiers, helpers, fixtures (`tests/**/*.py`)
