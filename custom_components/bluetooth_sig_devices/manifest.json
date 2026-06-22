@@ -12,7 +12,6 @@
     "bluetooth"
   ],
   "documentation": "https://github.com/RonanB96/ha-bluetooth-sig",
-  "homeassistant": "2026.1.0",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/RonanB96/ha-bluetooth-sig/issues",
   "requirements": [

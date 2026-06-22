@@ -55,7 +55,7 @@ See [Configure device-specific options](../how-to/configure-device-options.md) f
 
 ### Minimum Home Assistant version
 
-**2026.1.0** is required. This is declared in `manifest.json`, `hacs.json`, and enforced by HACS at install time.
+**2026.1.0** is required. This is declared in `hacs.json` (enforced by HACS at install time) and documented here.
 
 The integration targets the 2026.1+ Bluetooth processor APIs:
 

@@ -34,8 +34,8 @@ from homeassistant.components.bluetooth.passive_update_processor import (
 from homeassistant.core import HomeAssistant
 
 from .const import (
-    CONFIRMED_DEVICE_PROBE_BACKOFF,
     CONF_DEVICE_ADDRESS,
+    CONFIRMED_DEVICE_PROBE_BACKOFF,
     DEFAULT_CONNECTION_TIMEOUT,
     DOMAIN,
     MAX_PROBE_FAILURES,
@@ -149,7 +149,9 @@ class GATTManager:
     def _unconfirmed_probes_in_flight(self) -> int:
         """Count in-flight GATT probes for unconfirmed (discovery) devices."""
         return sum(
-            1 for address in self.pending_probes if not self._is_confirmed_device(address)
+            1
+            for address in self.pending_probes
+            if not self._is_confirmed_device(address)
         )
 
     def _max_concurrent_unconfirmed_probes(self) -> int:
@@ -176,7 +178,9 @@ class GATTManager:
         """Preempt discovery GATT work when a confirmed device needs a connection."""
         self._cancel_unconfirmed_probe_tasks()
 
-    def _log_probe_failure(self, address: BLEAddress, message: str, *args: object) -> None:
+    def _log_probe_failure(
+        self, address: BLEAddress, message: str, *args: object
+    ) -> None:
         """Log probe failure without spamming confirmed-device retries."""
         rendered_args = (address, *args)
         rendered_message = message % rendered_args
