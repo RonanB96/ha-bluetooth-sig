@@ -315,9 +315,7 @@ class TestConfirmedDeviceGattPriority:
         gatt.pending_probes.add(discovery)
         gatt._probe_tasks[discovery] = mock_task
 
-        gatt.schedule_probe_for_confirmed_device(
-            _make_service_info(address=confirmed)
-        )
+        gatt.schedule_probe_for_confirmed_device(_make_service_info(address=confirmed))
 
         mock_task.cancel.assert_called_once()
         assert discovery not in gatt.pending_probes
