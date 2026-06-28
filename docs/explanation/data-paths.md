@@ -13,7 +13,7 @@ flowchart LR
   end
 
   subgraph active["Path 2 — Connected"]
-    poll["Periodic read<br><i>every 5 min</i>"]
+    poll["GATT read<br><i>timer + adverts</i>"]
   end
 
   radio -->|advertisement| bcast
@@ -43,12 +43,17 @@ This path is **automatic** — sensor values update every time the device broadc
 
 ## Path 2: Connected reads (active)
 
-Some characteristics are only available by connecting to the device and reading them directly. If the integration detected readable characteristics during device discovery, it will periodically:
+Some characteristics are only available by connecting to the device and reading them directly. If the integration detected readable characteristics during device discovery, it reads them using **two triggers**:
 
-1. Connect to the device
-2. Read all known characteristics
-3. Update the corresponding sensor entities
-4. Disconnect
+1. **Per-device timer** — polls at the configured interval (default 5 minutes), even when Home Assistant deduplicates unchanged advertisements. Required for GATT-only devices that stop broadcasting new advert data after connect.
+2. **Advertisement events** — polls promptly when a device returns to range and the poll interval has elapsed since the last read.
+
+Both triggers share the same debouncer, so overlapping requests are coalesced. Each poll:
+
+1. Connects to the device
+2. Reads all known characteristics
+3. Updates the corresponding sensor entities
+4. Disconnects
 
 The default poll interval is **5 minutes** — see [Configure the GATT poll interval](../how-to/configure-poll-interval.md) to adjust it.
 
@@ -107,5 +112,6 @@ GATT-polled entities follow the same availability logic. If the device cannot be
 | Device out of range             | Entity becomes unavailable after ~15 min                          |
 | Device broadcasts infrequently  | Values update slowly (normal)                                     |
 | GATT poll interval is long      | Values from connected reads update slowly (adjust in hub options) |
+| GATT-only device; adverts deduplicated by HA | Timer still polls at configured interval |
 | GATT connection failed          | Poll is skipped; next attempt at next poll interval               |
 | Characteristic not in broadcast | Value only updates during GATT polls                              |

@@ -16,7 +16,7 @@ Two independent data paths feed the coordinator:
 - **Advertisement path** — passive; broadcast service data UUIDs and manufacturer data
 - **GATT path** — active; characteristic reading via BLE connection
 
-Both paths produce update objects merged by `ActiveBluetoothProcessorCoordinator`. The GATT path is polled on a timer; the advertisement path is event-driven.
+Both paths produce update objects merged by `ActiveBluetoothProcessorCoordinator`. The GATT path uses dual triggers (advertisement callbacks + per-device poll timer); the advertisement path is event-driven.
 
 See `.github/instructions/ha-integration.instructions.md` for component map, key patterns, and constraints.
 
@@ -36,17 +36,20 @@ See `.github/instructions/ha-integration.instructions.md` for component map, key
 - `_` prefix for private methods; `async_` prefix for async methods
 - `@callback` for synchronous HA event loop callbacks
 
-## Upstream Library Issues
+## Upstream workarounds
 
-When a workaround is needed due to a limitation in `bluetooth-sig-python`:
+When a workaround is needed due to a limitation in `bluetooth-sig-python` or Home Assistant core:
 
-1. Add the issue to `UPSTREAM_ISSUES.md` with a description, the workaround, and status
-2. Mark the workaround in code with `# UPSTREAM: see UPSTREAM_ISSUES.md`
-3. Open a GitHub issue on the library repo if significant
+1. Document the limitation and workaround in an inline comment or docstring at the call site
+2. Open a GitHub issue on the upstream repo if the limitation is significant
+
+Do not reference local agent-only notes from committed source, docs, or instruction files.
 
 ## Sub-Instructions
 
 These files are the source of truth for both GitHub Copilot and Cursor. Cursor loads them via symlinks in `.cursor/rules/`.
+
+Only link to **committed** paths from these instructions and from user-facing docs (`docs/`, README, integration source).
 
 - `.github/instructions/ha-integration.instructions.md` — component map, data flow, key patterns, constraints (`custom_components/**/*.py`)
 - `.github/instructions/ha-testing.instructions.md` — test tiers, helpers, fixtures (`tests/**/*.py`)
