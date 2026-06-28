@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
