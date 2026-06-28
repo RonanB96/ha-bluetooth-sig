@@ -39,7 +39,7 @@ See the [Getting Started tutorial](docs/tutorials/getting-started.md) for detail
 - **Automatic discovery** — detects devices broadcasting standard SIG service data or recognised manufacturer data
 - **Dynamic sensor creation** — entities with correct units, device classes, and state classes resolved from GATT specifications
 - **Passive scanning** — uses Home Assistant's passive Bluetooth infrastructure for low overhead
-- **Active GATT polling** — periodically connects to read characteristics not available in advertisements
+- **Active GATT polling** — connects on a configurable interval and when devices return to range (dual-trigger model for GATT-only devices)
 - **Zero per-device configuration** — discovered devices are presented for one-click confirmation
 
 ## Documentation

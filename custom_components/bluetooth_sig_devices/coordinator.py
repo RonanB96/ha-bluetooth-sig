@@ -376,6 +376,9 @@ class BluetoothSIGCoordinator:
         When *force* is False (timer path), ``needs_poll`` is checked first
         so advertisement-triggered polls are not duplicated.  When *force* is
         True (post-probe bootstrap), the poll is scheduled unconditionally.
+
+        Uses ABPC private attributes because HA core exposes no public API to
+        schedule a poll outside an advertisement callback.
         """
         proc = self._processor_coordinators.get(address)
         if proc is None:

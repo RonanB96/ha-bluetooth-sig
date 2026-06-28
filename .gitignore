@@ -201,6 +201,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# Agent-only codebase knowledge (not part of published docs)
+docs/codebase/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/

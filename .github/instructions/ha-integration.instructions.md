@@ -84,4 +84,4 @@ When no metadata is present, a MAC-based heuristic is applied: first octet in th
 
 - **New platform** (e.g., `binary_sensor`): Add to `PLATFORMS` in `__init__.py`, create platform file following `sensor.py`, extend `_build_passive_bluetooth_update()` in coordinator
 - **Debug logging:** See [docs/how-to/enable-debug-logging.md](../../docs/how-to/enable-debug-logging.md)
-- **Key references:** `ha_plan.md` (design rationale), `quality_scale.yaml` (HA quality tracking)
+- **Key references:** [docs/explanation/architecture.md](../../docs/explanation/architecture.md), [docs/explanation/limitations.md](../../docs/explanation/limitations.md), `quality_scale.yaml` (HA quality tracking)

@@ -1,6 +1,6 @@
 # Configure the GATT Poll Interval
 
-The integration periodically connects to Bluetooth devices that support GATT characteristic reads. This guide explains how to adjust the polling frequency.
+The integration connects to Bluetooth devices that support GATT characteristic reads on a configurable schedule and when devices return to range. This guide explains how to adjust the polling frequency.
 
 ## When to change the poll interval
 

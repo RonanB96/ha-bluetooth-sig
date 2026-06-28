@@ -26,8 +26,8 @@ pytest tests/ -v
 # Run specific test file
 pytest tests/test_sensor.py -v
 
-# Run with coverage
-pytest tests/ --cov=bluetooth_sig_devices --cov-report=term-missing
+# Run with coverage (matches CI — see .github/workflows/ci.yml)
+pytest tests/ -v --cov=custom_components/bluetooth_sig_devices --cov-report=term-missing
 ```
 
 ### Key Points
