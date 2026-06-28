@@ -460,7 +460,7 @@ class TestEndToEndGating:
         hass: HomeAssistant,
     ) -> None:
         """After the user confirms a device, create_device_processor creates
-        an ActiveBluetoothProcessorCoordinator.
+        a GattDevicePollCoordinator.
         """
         from custom_components.bluetooth_sig_devices.coordinator import (
             BluetoothSIGCoordinator,
@@ -479,15 +479,15 @@ class TestEndToEndGating:
         with (
             patch(
                 "custom_components.bluetooth_sig_devices.coordinator"
-                ".ActiveBluetoothProcessorCoordinator"
-            ) as mock_abpc,
+                ".GattDevicePollCoordinator"
+            ) as mock_gdpc,
             patch(
                 "custom_components.bluetooth_sig_devices.coordinator"
                 ".PassiveBluetoothDataProcessor"
             ),
         ):
-            mock_abpc_instance = MagicMock()
-            mock_abpc.return_value = mock_abpc_instance
+            mock_gdpc_instance = MagicMock()
+            mock_gdpc.return_value = mock_gdpc_instance
 
             coordinator.create_device_processor(
                 DEVICE_ADDRESS, dev, mock_add, mock_entity_cls

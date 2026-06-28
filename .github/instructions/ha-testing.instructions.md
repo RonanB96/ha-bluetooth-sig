@@ -14,7 +14,7 @@ alwaysApply: false
 | Unit | `test_coordinator.py`, `test_sensor.py`, `test_device_adapter.py`, etc. | Direct class instantiation with `MagicMock` |
 | Config flow | `test_config_flow.py`, `test_discovery_flow.py` | `mock_bluetooth_disabled` or `enable_bluetooth` |
 | Integration / advertising | `test_integration_advertising.py` | `enable_bluetooth` + `inject_bluetooth_service_info` + fixture replay |
-| Integration / GATT | `test_integration_connected.py` | `mock_gatt_connection`; autouse fixture patches `ActiveBluetoothProcessorCoordinator` |
+| Integration / GATT | `test_integration_connected.py`, `test_integration_confirmed_device.py` | `mock_gatt_connection`; confirmed-device poll path via real `GattDevicePollCoordinator` (no direct `GATTManager` calls) |
 
 ## Key Helpers
 

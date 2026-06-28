@@ -2,7 +2,7 @@
 
 Routes BLE device advertisements to the correct handling path:
 
-- **Confirmed devices** → schedule GATT re-probe via backoff.
+- **Confirmed devices** — handled by the per-device GATT poll coordinator.
 - **Unconfirmed devices** → evaluate advertisement support, fire
   discovery flow, or schedule a GATT probe and reject on exhaustion.
 - **GATT probe callbacks** → handle success (fire discovery) and
@@ -63,7 +63,6 @@ class DiscoveryOrchestrator:
         coord = self._coord
 
         if address in coord.processor_coordinators or coord.has_config_entry(address):
-            self._schedule_confirmed_gatt_probe(service_info)
             return
 
         self._handle_unconfirmed_device(service_info)
@@ -202,14 +201,9 @@ class DiscoveryOrchestrator:
     ) -> None:
         """Handle a successful GATT probe.
 
-        Triggers an immediate poll for confirmed devices and fires a
-        discovery flow for unconfirmed devices with parseable data.
+        Fires a discovery flow for unconfirmed devices with parseable data.
         """
         coord = self._coord
-
-        # Trigger an immediate poll so cached GATT data reaches
-        # entities without waiting for a new advertisement.
-        coord.notify_probe_complete(address)
 
         if coord.has_config_entry(address):
             return
@@ -301,27 +295,3 @@ class DiscoveryOrchestrator:
                 gatt._max_probe_retries,
                 address,
             )
-
-    # ------------------------------------------------------------------
-    # Confirmed device GATT probe
-    # ------------------------------------------------------------------
-
-    def _schedule_confirmed_gatt_probe(
-        self,
-        service_info: BluetoothServiceInfoBleak,
-    ) -> None:
-        """Schedule GATT probing for a user-confirmed device if applicable.
-
-        Called on every advertisement for confirmed devices.  The
-        ``GATTManager.schedule_probe_for_confirmed_device()`` method
-        gates on its own backoff timer and dedup checks, so calling
-        this frequently is safe (O(1) dict lookups).
-
-        Skips silently if the device is not connectable or GATT is
-        disabled via the device's config entry options.
-        """
-        if not service_info.connectable:
-            return
-        if not self._coord._is_gatt_enabled(service_info.address):
-            return
-        self._coord.gatt_manager.schedule_probe_for_confirmed_device(service_info)

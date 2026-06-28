@@ -74,6 +74,104 @@ from .support_detector import SupportDetector
 
 _LOGGER = logging.getLogger(__name__)
 
+_DataUpdate = PassiveBluetoothDataUpdate[float | int | str | bool]
+
+
+class GattDevicePollCoordinator(ActiveBluetoothProcessorCoordinator[_DataUpdate]):
+    """Processor coordinator with an encapsulated GATT poll timer.
+
+    Steady-state GATT polling for quiet devices (whose advertisements are
+    deduplicated by HA) is driven by a per-device interval timer owned here,
+    alongside the framework's advertisement-triggered poll path.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        logger: logging.Logger,
+        *,
+        address: str,
+        poll_interval_seconds: int,
+        mode: BluetoothScanningMode,
+        update_method: Callable[[BluetoothServiceInfoBleak], _DataUpdate],
+        needs_poll_method: Callable[[BluetoothServiceInfoBleak, float | None], bool],
+        poll_method: Callable[
+            [BluetoothServiceInfoBleak],
+            Coroutine[Any, Any, _DataUpdate],
+        ],
+        connectable: bool = True,
+    ) -> None:
+        """Initialise the coordinator and store the poll interval."""
+        super().__init__(
+            hass,
+            logger,
+            address=address,
+            mode=mode,
+            update_method=update_method,
+            needs_poll_method=needs_poll_method,
+            poll_method=poll_method,
+            connectable=connectable,
+        )
+        self._poll_interval = timedelta(seconds=poll_interval_seconds)
+        self._poll_timer_unsub: CALLBACK_TYPE | None = None
+
+    @callback
+    def _async_start(self) -> None:
+        """Start Bluetooth callbacks and the GATT poll timer."""
+        super()._async_start()
+        self._start_poll_timer()
+        self._schedule_timer_poll(force=True)
+
+    @callback
+    def _async_stop(self) -> None:
+        """Cancel the poll timer and stop Bluetooth callbacks."""
+        self._cancel_poll_timer()
+        super()._async_stop()
+
+    def _start_poll_timer(self) -> None:
+        """Start periodic GATT polling independent of advertisement callbacks."""
+        self._cancel_poll_timer()
+
+        @callback
+        def _async_gatt_poll_timer(_now: object) -> None:
+            self._schedule_timer_poll()
+
+        self._poll_timer_unsub = async_track_time_interval(
+            self.hass,
+            _async_gatt_poll_timer,
+            self._poll_interval,
+            cancel_on_shutdown=True,
+        )
+        _LOGGER.debug(
+            "Started GATT poll timer for %s (interval=%ds)",
+            self.address,
+            self._poll_interval.total_seconds(),
+        )
+
+    def _cancel_poll_timer(self) -> None:
+        """Cancel the periodic GATT poll timer."""
+        if self._poll_timer_unsub is not None:
+            self._poll_timer_unsub()
+            self._poll_timer_unsub = None
+
+    @callback
+    def _schedule_timer_poll(self, *, force: bool = False) -> None:
+        """Schedule a GATT poll via the framework debouncer."""
+        service_info = bluetooth.async_last_service_info(
+            self.hass, self.address, connectable=True
+        )
+        if service_info is None:
+            service_info = self._last_service_info
+        if service_info is None:
+            _LOGGER.debug(
+                "Cannot trigger timer poll for %s — no service info", self.address
+            )
+            return
+        if not force and not self.needs_poll(service_info):
+            return
+        _LOGGER.debug("Scheduling timer GATT poll for %s", self.address)
+        self._debounced_poll.async_schedule_call()  # noqa: SLF001
+
 
 class BluetoothSIGCoordinator:
     """Coordinator for managing Bluetooth SIG devices.
@@ -123,15 +221,7 @@ class BluetoothSIGCoordinator:
             )
 
         # Per-device processor coordinators keyed by address
-        self._processor_coordinators: dict[
-            BLEAddress,
-            ActiveBluetoothProcessorCoordinator[
-                PassiveBluetoothDataUpdate[float | int | str | bool]
-            ],
-        ] = {}
-
-        # Per-device GATT poll timers (independent of advertisement dedup)
-        self._gatt_poll_cancel: dict[BLEAddress, CALLBACK_TYPE] = {}
+        self._processor_coordinators: dict[BLEAddress, GattDevicePollCoordinator] = {}
 
         # Callback to unregister global discovery
         self._cancel_discovery: CALLBACK_TYPE | None = None
@@ -159,12 +249,7 @@ class BluetoothSIGCoordinator:
     @property
     def processor_coordinators(
         self,
-    ) -> dict[
-        BLEAddress,
-        ActiveBluetoothProcessorCoordinator[
-            PassiveBluetoothDataUpdate[float | int | str | bool]
-        ],
-    ]:
+    ) -> dict[BLEAddress, GattDevicePollCoordinator]:
         """Return the per-device processor coordinators."""
         return self._processor_coordinators
 
@@ -288,12 +373,15 @@ class BluetoothSIGCoordinator:
            - **Event-driven:** ``needs_poll_method`` / ``poll_method`` on
              each advertisement callback (prompt poll when a device
              returns to range).
-           - **Timer-driven:** ``async_track_time_interval`` per device at
-             the effective poll interval (steady-state polling for GATT-only
-             devices whose advertisements are deduplicated by HA).
+           - **Timer-driven:** ``GattDevicePollCoordinator`` runs an
+             interval timer at the effective poll interval (steady-state
+             polling for GATT-only devices whose advertisements are
+             deduplicated by HA).
 
         Both triggers schedule polls via the framework ``Debouncer`` (10 s
         cooldown, ``immediate=True``), which coalesces overlapping requests.
+        The first poll after start or restart self-discovers GATT
+        characteristics when no probe cache exists.
         """
         if address in self._processor_coordinators:
             _LOGGER.debug("Processor already exists for %s — skipping", address)
@@ -301,12 +389,11 @@ class BluetoothSIGCoordinator:
 
         _LOGGER.info("Creating processor coordinator for device %s", address)
 
-        processor_coordinator: ActiveBluetoothProcessorCoordinator[
-            PassiveBluetoothDataUpdate[float | int | str | bool]
-        ] = ActiveBluetoothProcessorCoordinator(
+        processor_coordinator = GattDevicePollCoordinator(
             self.hass,
             _LOGGER,
             address=address,
+            poll_interval_seconds=self._effective_poll_interval(entry),
             mode=BluetoothScanningMode.PASSIVE,
             update_method=self.update_device,
             needs_poll_method=self._needs_poll(address, entry),
@@ -330,8 +417,6 @@ class BluetoothSIGCoordinator:
         entry.async_on_unload(processor_coordinator.async_start())
 
         self._processor_coordinators[address] = processor_coordinator
-        self._start_gatt_poll_timer(address, entry)
-        entry.async_on_unload(lambda: self._cancel_gatt_poll_timer(address))
         _LOGGER.info("Now tracking Bluetooth device %s", address)
 
     # ------------------------------------------------------------------
@@ -343,54 +428,6 @@ class BluetoothSIGCoordinator:
         device_interval = entry.options.get(CONF_DEVICE_POLL_INTERVAL, 0)
         return device_interval if device_interval else self.poll_interval
 
-    def _start_gatt_poll_timer(self, address: BLEAddress, entry: ConfigEntry) -> None:
-        """Start periodic GATT polling independent of advertisement callbacks."""
-        self._cancel_gatt_poll_timer(address)
-        interval = timedelta(seconds=self._effective_poll_interval(entry))
-
-        @callback
-        def _async_gatt_poll_timer(_now: object) -> None:
-            self._schedule_gatt_poll(address)
-
-        self._gatt_poll_cancel[address] = async_track_time_interval(
-            self.hass,
-            _async_gatt_poll_timer,
-            interval,
-            cancel_on_shutdown=True,
-        )
-        _LOGGER.debug(
-            "Started GATT poll timer for %s (interval=%ds)",
-            address,
-            interval.total_seconds(),
-        )
-
-    def _cancel_gatt_poll_timer(self, address: BLEAddress) -> None:
-        """Cancel the periodic GATT poll timer for *address*."""
-        if cancel := self._gatt_poll_cancel.pop(address, None):
-            cancel()
-
-    @callback
-    def _schedule_gatt_poll(self, address: BLEAddress, *, force: bool = False) -> None:
-        """Schedule a GATT poll via the processor debouncer.
-
-        When *force* is False (timer path), ``needs_poll`` is checked first
-        so advertisement-triggered polls are not duplicated.  When *force* is
-        True (post-probe bootstrap), the poll is scheduled unconditionally.
-
-        Uses ABPC private attributes because HA core exposes no public API to
-        schedule a poll outside an advertisement callback.
-        """
-        proc = self._processor_coordinators.get(address)
-        if proc is None:
-            return
-        if proc._last_service_info is None:  # noqa: SLF001
-            _LOGGER.debug("Cannot trigger poll for %s — no last service info", address)
-            return
-        if not force and not proc.needs_poll(proc._last_service_info):  # noqa: SLF001
-            return
-        _LOGGER.debug("Scheduling GATT poll for %s", address)
-        proc._debounced_poll.async_schedule_call()  # noqa: SLF001
-
     def _needs_poll(
         self, address: BLEAddress, entry: ConfigEntry
     ) -> Callable[[BluetoothServiceInfoBleak, float | None], bool]:
@@ -399,14 +436,13 @@ class BluetoothSIGCoordinator:
         Returns ``True`` when:
 
         - GATT is enabled for this device (``gatt_enabled`` option), AND
-        - GATT probe results exist with parseable characteristics, AND
+        - A connectable BLE device is available, AND
         - The device has never been polled, or the effective poll interval
           seconds have elapsed since the last poll.
 
         The effective poll interval is the device-level override if set
         (non-zero), otherwise the hub-level ``poll_interval``.
         """
-        gatt = self._gatt_manager
 
         def _check(
             _service_info: BluetoothServiceInfoBleak,
@@ -414,12 +450,14 @@ class BluetoothSIGCoordinator:
         ) -> bool:
             if not entry.options.get(CONF_GATT_ENABLED, True):
                 return False
-            probe = gatt.probe_results.get(address)
-            if not probe or not probe.has_support():
+            if last_poll is not None and last_poll < self._effective_poll_interval(
+                entry
+            ):
                 return False
-            if last_poll is None:
-                return True
-            return last_poll >= self._effective_poll_interval(entry)
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, address, connectable=True
+            )
+            return ble_device is not None
 
         return _check
 
@@ -440,12 +478,12 @@ class BluetoothSIGCoordinator:
         gatt = self._gatt_manager
 
         async def _poll(
-            _service_info: BluetoothServiceInfoBleak,
+            service_info: BluetoothServiceInfoBleak,
         ) -> PassiveBluetoothDataUpdate[float | int | str | bool]:
             if not entry.options.get(CONF_GATT_ENABLED, True):
                 msg = f"GATT disabled for {address}"
                 raise RuntimeError(msg)
-            result = await gatt.async_poll_gatt_with_semaphore(address)
+            result = await gatt.async_poll_gatt_with_semaphore(address, service_info)
             if result is None:
                 msg = f"GATT poll returned no data for {address}"
                 raise RuntimeError(msg)
@@ -453,29 +491,8 @@ class BluetoothSIGCoordinator:
 
         return _poll
 
-    @callback
-    def notify_probe_complete(self, address: BLEAddress) -> None:
-        """Trigger an immediate poll after a successful GATT probe.
-
-        For devices whose advertisement data never changes, HA's bluetooth
-        framework deduplicates and stops firing callbacks.  Without a new
-        callback the ``ActiveBluetoothProcessorCoordinator`` never
-        re-evaluates ``needs_poll``, so cached GATT data would remain
-        undelivered.
-
-        Steady-state polling for such devices is handled by the per-device
-        GATT poll timer started in ``create_device_processor``.  This method
-        forces an immediate debounced poll so probe-time cached data reaches
-        entities promptly.
-        """
-        _LOGGER.debug(
-            "Triggering immediate poll for %s after successful probe", address
-        )
-        self._schedule_gatt_poll(address, force=True)
-
     def remove_device(self, address: BLEAddress) -> None:
         """Remove tracking state for a device whose config entry was removed."""
-        self._cancel_gatt_poll_timer(address)
         self._processor_coordinators.pop(address, None)
         self._gatt_manager.remove_device(address)
         self._discovery_tracker.remove_device(address)
@@ -608,8 +625,8 @@ class BluetoothSIGCoordinator:
         await self._gatt_manager.async_stop()
         self._discovery_tracker.async_stop()
 
-        for address in list(self._gatt_poll_cancel):
-            self._cancel_gatt_poll_timer(address)
+        for proc in self._processor_coordinators.values():
+            proc._cancel_poll_timer()
 
         # Cancel discovery callback
         if self._cancel_discovery is not None:

@@ -11,9 +11,11 @@ alwaysApply: false
 
 `__init__.py` creates `BluetoothSIGCoordinator` (hub entry) → `async_start()` registers global BT callback → `_async_device_discovered()` → `DiscoveryOrchestrator.ensure_device_processor()` (fires discovery flow / schedules GATT probe / rejects) → after user confirms: `create_device_processor()` → `ActiveBluetoothProcessorCoordinator` → `data_pipeline.update_device()` → `PassiveBluetoothDataUpdate` → `BluetoothSIGSensorEntity`.
 
-The GATT poll is dual-triggered:
+The GATT poll is dual-triggered on each confirmed device via ``GattDevicePollCoordinator``:
 - **Event-driven:** `needs_poll_method` on each advertisement callback (prompt poll when a device returns to range)
-- **Timer-driven:** `async_track_time_interval` per confirmed device at the effective poll interval (steady-state polling for GATT-only devices whose adverts are deduplicated by HA)
+- **Timer-driven:** per-device `async_track_time_interval` at the effective poll interval (steady-state polling for GATT-only devices whose adverts are deduplicated by HA)
+
+The poll path self-discovers GATT characteristics when no probe cache exists (for example after HA restart). Unconfirmed discovery still uses a separate GATT probe path.
 
 **Reference integrations:** iBeacon, private_ble_device — same hub + `BluetoothCallbackMatcher(connectable=False)` pattern. OralB, Xiaomi BLE — same `ActiveBluetoothProcessorCoordinator` + `needs_poll_method` / `poll_method` pattern.
 
@@ -47,7 +49,7 @@ The GATT poll is dual-triggered:
 - **Value routing:** Primitives → `add_simple_entity()`; msgspec Structs → `add_struct_entities()` with recursion and field-name prefixes; per-field units via `resolve_field_unit()` → GSS `FieldSpec.unit_id` → `UnitsRegistry`
 - **Value coercion** (`to_ha_state`): `bool` → `bool`, `IntFlag` → `int`, `enum` → `.name`, primitives pass through, fallback → `str()`
 - **Device class resolution:** `UNIT_TO_DEVICE_CLASS` dict in `entity_metadata`; disambiguates `"%"` by name (battery vs humidity); `CUMULATIVE_FIELD_NAMES` → `TOTAL_INCREASING`
-- **GATT probe/poll:** `GATTManager.async_probe_device()` → `GATTProbeResult`; poll scheduling via `ActiveBluetoothProcessorCoordinator` (advert callbacks) plus per-device GATT poll timer in `coordinator.py`. Confirmed-device GATT work preempts discovery probes when connection slots are contended.
+- **GATT probe/poll:** Unconfirmed discovery uses `GATTManager.async_probe_device()` via `schedule_probe`. Confirmed devices use self-discovering GATT polls via `GattDevicePollCoordinator` (advertisement- and timer-triggered). Confirmed-device GATT work preempts discovery probes when connection slots are contended.
 - **Public diagnostics API:** `coordinator.get_diagnostics_snapshot()` returns all diagnostic data; `coordinator.is_device_active()` checks processor status
 - **Registry pre-warming:** `prewarm_registries()` static method run in executor during setup
 
