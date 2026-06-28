@@ -7,17 +7,16 @@ Polling (reading characteristics from already-probed devices) is
 delegated to ``gatt_poller`` — this module only manages probe
 scheduling, failure tracking, and concurrency.
 
-Periodic GATT polling is handled by the HA-native
-``ActiveBluetoothProcessorCoordinator`` which calls back into
-``async_poll_gatt_with_semaphore()`` via the coordinator's
-``poll_method`` closure.
+Periodic GATT polling is handled by ``GattDevicePollCoordinator`` which calls
+``async_poll_gatt_with_semaphore()`` via the coordinator's ``poll_method``
+closure.  Confirmed devices self-discover GATT characteristics on the first
+poll when no probe cache exists.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +34,6 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_DEVICE_ADDRESS,
-    CONFIRMED_DEVICE_PROBE_BACKOFF,
     DEFAULT_CONNECTION_TIMEOUT,
     DOMAIN,
     MAX_PROBE_FAILURES,
@@ -128,10 +126,6 @@ class GATTManager:
         self._initial_gatt_cache: dict[
             BLEAddress, PassiveBluetoothDataUpdate[float | int | str | bool]
         ] = {}
-        # Monotonic timestamp of last probe attempt for confirmed devices
-        self._confirmed_probe_last_attempt: dict[BLEAddress, float] = {}
-        # Confirmed devices already logged as unavailable for GATT probing
-        self._confirmed_probe_unavailable_logged: set[BLEAddress] = set()
         # Addresses whose last probe attempt failed rather than returning no support
         self._last_probe_error: dict[BLEAddress, str] = {}
 
@@ -181,35 +175,14 @@ class GATTManager:
     def _log_probe_failure(
         self, address: BLEAddress, message: str, *args: object
     ) -> None:
-        """Log probe failure without spamming confirmed-device retries."""
+        """Log probe failure at debug level."""
         rendered_args = (address, *args)
         rendered_message = message % rendered_args
-        if self._is_confirmed_device(address):
-            if address not in self._confirmed_probe_unavailable_logged:
-                _LOGGER.warning(
-                    "Bluetooth device %s is unavailable for GATT probing: %s",
-                    address,
-                    rendered_message,
-                )
-                self._confirmed_probe_unavailable_logged.add(address)
-                return
-
-            _LOGGER.debug("%s", rendered_message)
-            return
-
         _LOGGER.debug("%s", rendered_message)
 
     def _log_probe_success(self, address: BLEAddress, parseable_count: int) -> None:
         """Log probe success or recovery depending on prior failure state."""
         if self._is_confirmed_device(address):
-            if address in self._confirmed_probe_unavailable_logged:
-                _LOGGER.info(
-                    "Bluetooth device %s is back online for GATT probing",
-                    address,
-                )
-                self._confirmed_probe_unavailable_logged.discard(address)
-                return
-
             _LOGGER.debug(
                 "GATT probe successful for %s: %d parseable characteristics",
                 address,
@@ -540,11 +513,14 @@ class GATTManager:
     async def async_poll_gatt_with_semaphore(
         self,
         address: BLEAddress,
+        service_info: BluetoothServiceInfoBleak,
     ) -> PassiveBluetoothDataUpdate[float | int | str | bool] | None:
         """Poll GATT characteristics with concurrency control.
 
-        On the first call after a successful probe, returns the cached
-        initial read without acquiring the semaphore.
+        When no probe result exists yet (for example after HA restart),
+        runs service discovery via ``async_probe_device`` first, then
+        reads.  On the first call after a successful probe, returns the
+        cached initial read without acquiring the semaphore.
         """
         cached = self._initial_gatt_cache.pop(address, None)
         if cached is not None:
@@ -553,6 +529,17 @@ class GATTManager:
         if self._is_confirmed_device(address):
             self._prioritize_confirmed_gatt()
         async with self._probe_semaphore:
+            if address not in self.probe_results:
+                result = await self.async_probe_device(service_info)
+                if not result or not result.has_support():
+                    return None
+                cached = self._initial_gatt_cache.pop(address, None)
+                if cached is not None:
+                    _LOGGER.debug(
+                        "Returning cached initial GATT data for %s after discovery",
+                        address,
+                    )
+                    return cached
             return await self.async_poll_gatt_characteristics(address)
 
     # ------------------------------------------------------------------
@@ -562,9 +549,8 @@ class GATTManager:
     def _create_probe_task(self, service_info: BluetoothServiceInfoBleak) -> None:
         """Create and track a GATT probe task.
 
-        Shared by ``schedule_probe`` and
-        ``schedule_probe_for_confirmed_device``.  The caller is
-        responsible for all guard checks before calling this.
+        Shared by ``schedule_probe``.  The caller is responsible for all
+        guard checks before calling this.
         """
         address = service_info.address
         self.pending_probes.add(address)
@@ -604,32 +590,6 @@ class GATTManager:
             return
         self._create_probe_task(service_info)
 
-    def schedule_probe_for_confirmed_device(
-        self, service_info: BluetoothServiceInfoBleak
-    ) -> None:
-        """Schedule a GATT probe for a device the user has already confirmed.
-
-        Unlike ``schedule_probe``, this applies a backoff gate to avoid
-        flooding the BLE adapter when a device is temporarily out of
-        range.
-        """
-        address = service_info.address
-
-        # Already have a successful probe result, or a probe is in flight.
-        if address in self.probe_results or address in self.pending_probes:
-            return
-
-        # Backoff gate — only applies when there have been prior failures.
-        failures = self.probe_failures.get(address, 0)
-        if failures > 0:
-            last_attempt = self._confirmed_probe_last_attempt.get(address, 0.0)
-            if (time.monotonic() - last_attempt) < CONFIRMED_DEVICE_PROBE_BACKOFF:
-                return
-
-        self._confirmed_probe_last_attempt[address] = time.monotonic()
-        self._prioritize_confirmed_gatt()
-        self._create_probe_task(service_info)
-
     def is_failures_exhausted(self, address: BLEAddress) -> bool:
         """Return True if all probe failure attempts have been used.
 
@@ -653,8 +613,6 @@ class GATTManager:
         self.probe_failures.pop(address, None)
         self.pending_probes.discard(address)
         self._initial_gatt_cache.pop(address, None)
-        self._confirmed_probe_last_attempt.pop(address, None)
-        self._confirmed_probe_unavailable_logged.discard(address)
         self._last_probe_error.pop(address, None)
         task = self._probe_tasks.pop(address, None)
         if task is not None:

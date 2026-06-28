@@ -94,7 +94,11 @@ def make_hub_entry(**kwargs: Any) -> MockConfigEntry:
 
 
 def make_device_entry(
-    address: str = DEVICE_ADDRESS, name: str = DEVICE_NAME, **kwargs: Any
+    address: str = DEVICE_ADDRESS,
+    name: str = DEVICE_NAME,
+    *,
+    options: dict[str, Any] | None = None,
+    **kwargs: Any,
 ) -> MockConfigEntry:
     """Return a mock per-device config entry."""
     defaults: dict[str, Any] = {
@@ -104,6 +108,8 @@ def make_device_entry(
         "source": "integration_discovery",
         "unique_id": address,
     }
+    if options is not None:
+        defaults["options"] = options
     defaults.update(kwargs)
     return MockConfigEntry(**defaults)
 

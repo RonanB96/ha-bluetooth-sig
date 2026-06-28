@@ -11,8 +11,8 @@ rules:
     comment: >
       Advertisement updates are event-driven (local_push). GATT reads use
       configurable per-device timers plus advertisement-triggered polls via
-      ActiveBluetoothProcessorCoordinator; needs_poll coalesces overlapping
-      poll requests.
+      GattDevicePollCoordinator; needs_poll coalesces overlapping poll
+      requests and self-discovers characteristics after restart.
   brands:
     status: exempt
     comment: This is a generic Bluetooth integration, not a specific brand/product.

@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from bluetooth_sig.types.uuid import BluetoothUUID
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
@@ -294,17 +292,11 @@ class TestConfirmedDeviceGattPriority:
 
         mock_hass.async_create_task.assert_not_called()
 
-    def test_confirmed_probe_cancels_unconfirmed_tasks(self) -> None:
-        """Confirmed-device probes preempt in-flight discovery probes."""
+    async def test_confirmed_poll_cancels_unconfirmed_tasks(self) -> None:
+        """Confirmed-device polls preempt in-flight discovery probes."""
         mock_hass = MagicMock()
         mock_task = MagicMock()
         mock_task.done.return_value = False
-
-        def _capture_and_close(coro, *args, **kwargs):
-            coro.close()
-            return MagicMock()
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
 
         coord = _make_coordinator(mock_hass)
         gatt = coord.gatt_manager
@@ -314,12 +306,14 @@ class TestConfirmedDeviceGattPriority:
         coord.has_config_entry = MagicMock(side_effect=lambda addr: addr == confirmed)
         gatt.pending_probes.add(discovery)
         gatt._probe_tasks[discovery] = mock_task
+        gatt.async_probe_device = AsyncMock(return_value=None)
+        gatt.async_poll_gatt_characteristics = AsyncMock(return_value=None)
 
-        gatt.schedule_probe_for_confirmed_device(_make_service_info(address=confirmed))
+        service_info = _make_service_info(address=confirmed)
+        await gatt.async_poll_gatt_with_semaphore(confirmed, service_info)
 
         mock_task.cancel.assert_called_once()
         assert discovery not in gatt.pending_probes
-        mock_hass.async_create_task.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +433,9 @@ class TestAsyncPollWithSemaphore:
         mock_update = MagicMock()
         gatt._initial_gatt_cache["AA:BB:CC:DD:EE:FF"] = mock_update
 
-        result = await gatt.async_poll_gatt_with_semaphore("AA:BB:CC:DD:EE:FF")
+        result = await gatt.async_poll_gatt_with_semaphore(
+            "AA:BB:CC:DD:EE:FF", _make_service_info()
+        )
         assert result is mock_update
         # Cache should be consumed
         assert "AA:BB:CC:DD:EE:FF" not in gatt._initial_gatt_cache
@@ -449,15 +445,51 @@ class TestAsyncPollWithSemaphore:
         mock_hass = MagicMock()
         coord = _make_coordinator(mock_hass)
         gatt = coord.gatt_manager
+        service_info = _make_service_info()
 
-        # No cached data → should call async_poll_gatt_characteristics
+        probe_result = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test",
+            parseable_count=1,
+            supported_char_uuids=(BluetoothUUID("2A19"),),
+        )
+        gatt.probe_results["AA:BB:CC:DD:EE:FF"] = probe_result
         gatt.async_poll_gatt_characteristics = AsyncMock(return_value=None)
-        result = await gatt.async_poll_gatt_with_semaphore("AA:BB:CC:DD:EE:FF")
+        result = await gatt.async_poll_gatt_with_semaphore(
+            "AA:BB:CC:DD:EE:FF", service_info
+        )
 
         assert result is None
         gatt.async_poll_gatt_characteristics.assert_called_once_with(
             "AA:BB:CC:DD:EE:FF"
         )
+
+    async def test_discovers_when_no_probe_results(self) -> None:
+        """First poll runs service discovery when probe cache is empty."""
+        mock_hass = MagicMock()
+        coord = _make_coordinator(mock_hass)
+        gatt = coord.gatt_manager
+        service_info = _make_service_info()
+        probe_result = GATTProbeResult(
+            address="AA:BB:CC:DD:EE:FF",
+            name="Test",
+            parseable_count=1,
+            supported_char_uuids=(BluetoothUUID("2A19"),),
+        )
+        mock_update = MagicMock()
+
+        gatt.async_probe_device = AsyncMock(return_value=probe_result)
+        gatt.async_poll_gatt_characteristics = AsyncMock(return_value=mock_update)
+
+        result = await gatt.async_poll_gatt_with_semaphore(
+            "AA:BB:CC:DD:EE:FF", service_info
+        )
+
+        gatt.async_probe_device.assert_awaited_once_with(service_info)
+        gatt.async_poll_gatt_characteristics.assert_awaited_once_with(
+            "AA:BB:CC:DD:EE:FF"
+        )
+        assert result is mock_update
 
 
 # ---------------------------------------------------------------------------
@@ -829,110 +861,6 @@ class TestAsyncProbeAndSetup:
 
         assert gatt.probe_failures.get(addr, 0) >= 1
 
-    async def test_confirmed_timeout_logs_unavailable_once(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Confirmed-device probe timeout logs one unavailable transition."""
-        mock_hass = MagicMock()
-
-        def _close_task_coro(
-            coro: _ClosableCoroutine, *args: object, **kwargs: object
-        ) -> MagicMock:
-            coro.close()
-            return MagicMock()
-
-        mock_hass.async_create_task = MagicMock(side_effect=_close_task_coro)
-        coord = _make_coordinator(mock_hass)
-        coord._has_config_entry = MagicMock(return_value=True)  # type: ignore[method-assign]
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-        service_info = _make_service_info(address=addr)
-
-        async def _timeout_wait_for(
-            coro: _ClosableCoroutine, *, timeout: float | None = None
-        ) -> object:
-            coro.close()
-            raise TimeoutError("timed out")
-
-        with (
-            caplog.at_level(logging.INFO),
-            patch(
-                "custom_components.bluetooth_sig_devices.gatt_manager.asyncio.wait_for",
-                side_effect=_timeout_wait_for,
-            ),
-        ):
-            await gatt.async_probe_and_setup(service_info)
-            await gatt.async_probe_and_setup(service_info)
-
-        unavailable_logs = [
-            record
-            for record in caplog.records
-            if "unavailable for GATT probing" in record.message
-        ]
-        assert len(unavailable_logs) == 1
-        assert unavailable_logs[0].levelname == "WARNING"
-
-    async def test_confirmed_probe_recovery_logs_back_online_once(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Confirmed-device recovery logs one back-online transition."""
-        mock_hass = MagicMock()
-
-        def _close_task_coro(
-            coro: _ClosableCoroutine, *args: object, **kwargs: object
-        ) -> MagicMock:
-            coro.close()
-            return MagicMock()
-
-        mock_hass.async_create_task = MagicMock(side_effect=_close_task_coro)
-        coord = _make_coordinator(mock_hass)
-        coord._has_config_entry = MagicMock(return_value=True)  # type: ignore[method-assign]
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-        service_info = _make_service_info(address=addr)
-        probe_result = GATTProbeResult(
-            address=addr,
-            name="Test",
-            parseable_count=1,
-            supported_char_uuids=(BluetoothUUID("2A19"),),
-        )
-
-        async def _timeout_wait_for(
-            coro: _ClosableCoroutine, *, timeout: float | None = None
-        ) -> object:
-            coro.close()
-            raise TimeoutError("timed out")
-
-        with patch(
-            "custom_components.bluetooth_sig_devices.gatt_manager.asyncio.wait_for",
-            side_effect=_timeout_wait_for,
-        ):
-            await gatt.async_probe_and_setup(service_info)
-
-        caplog.clear()
-
-        with (
-            caplog.at_level(logging.INFO),
-            patch.object(
-                gatt,
-                "async_probe_device",
-                new_callable=AsyncMock,
-                return_value=probe_result,
-            ),
-        ):
-            await gatt.async_probe_and_setup(service_info)
-            await gatt.async_probe_and_setup(service_info)
-
-        recovery_logs = [
-            record
-            for record in caplog.records
-            if "is back online for GATT probing" in record.message
-        ]
-        assert len(recovery_logs) == 1
-        assert recovery_logs[0].levelname == "INFO"
-
     async def test_probe_and_setup_invokes_success_callback(self) -> None:
         """async_probe_and_setup invokes on_probe_success with correct args."""
         mock_hass = MagicMock()
@@ -972,158 +900,5 @@ class TestAsyncProbeAndSetup:
 
 
 # ---------------------------------------------------------------------------
-# schedule_probe_for_confirmed_device
+# End of gatt_manager tests
 # ---------------------------------------------------------------------------
-
-
-class TestScheduleProbeForConfirmedDevice:
-    """Tests for schedule_probe_for_confirmed_device bypass logic."""
-
-    def test_schedules_probe_first_time(self) -> None:
-        """Test probe is scheduled when no previous result or failures."""
-        mock_hass = MagicMock()
-        mock_task = MagicMock()
-
-        def _capture_and_close(coro, *args, **kwargs):
-            coro.close()
-            return mock_task
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        gatt.schedule_probe_for_confirmed_device(_make_service_info())
-
-        assert "AA:BB:CC:DD:EE:FF" in gatt.pending_probes
-        mock_hass.async_create_task.assert_called_once()
-
-    def test_skips_when_result_already_cached(self) -> None:
-        """Test no new probe when probe_results already has an entry."""
-        mock_hass = MagicMock()
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        gatt.probe_results["AA:BB:CC:DD:EE:FF"] = MagicMock()
-        gatt.schedule_probe_for_confirmed_device(_make_service_info())
-
-        mock_hass.async_create_task.assert_not_called()
-
-    def test_skips_when_probe_pending(self) -> None:
-        """Test no new probe when one is already in flight."""
-        mock_hass = MagicMock()
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        gatt.pending_probes.add("AA:BB:CC:DD:EE:FF")
-        gatt.schedule_probe_for_confirmed_device(_make_service_info())
-
-        mock_hass.async_create_task.assert_not_called()
-
-    def test_reschedules_after_backoff_expires(self) -> None:
-        """Test re-probe fires after the backoff window has elapsed."""
-        import time
-
-        from custom_components.bluetooth_sig_devices.const import (
-            CONFIRMED_DEVICE_PROBE_BACKOFF,
-        )
-
-        mock_hass = MagicMock()
-        mock_task = MagicMock()
-
-        def _capture_and_close(coro, *args, **kwargs):
-            coro.close()
-            return mock_task
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-
-        # Simulate exhausted failures with a stale last-attempt timestamp
-        gatt.probe_failures[addr] = gatt._max_probe_retries
-        gatt._confirmed_probe_last_attempt[addr] = (
-            time.monotonic() - CONFIRMED_DEVICE_PROBE_BACKOFF - 1
-        )
-
-        gatt.schedule_probe_for_confirmed_device(_make_service_info())
-
-        # Probe scheduled despite exhausted failures (failures not cleared).
-        assert addr in gatt.pending_probes
-        mock_hass.async_create_task.assert_called_once()
-
-    def test_does_not_reschedule_within_backoff(self) -> None:
-        """Test re-probe is suppressed while within the backoff window."""
-        import time
-
-        mock_hass = MagicMock()
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-        gatt.probe_failures[addr] = gatt._max_probe_retries
-        # Last attempt was very recent
-        gatt._confirmed_probe_last_attempt[addr] = time.monotonic()
-
-        gatt.schedule_probe_for_confirmed_device(_make_service_info())
-
-        mock_hass.async_create_task.assert_not_called()
-
-    def test_backoff_gate_applies_unlike_schedule_probe(self) -> None:
-        """schedule_probe_for_confirmed_device applies backoff; schedule_probe does not.
-
-        schedule_probe() is a simple dedup gate (no failure/backoff awareness).
-        schedule_probe_for_confirmed_device() adds a time-based backoff when
-        prior failures exist — this is the API distinction between the two.
-        """
-        import time
-
-        from custom_components.bluetooth_sig_devices.const import (
-            CONFIRMED_DEVICE_PROBE_BACKOFF,
-        )
-
-        mock_hass = MagicMock()
-        mock_task = MagicMock()
-
-        def _capture_and_close(coro, *args, **kwargs):
-            coro.close()
-            return mock_task
-
-        mock_hass.async_create_task.side_effect = _capture_and_close
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-        service_info = _make_service_info(addr)
-
-        # Exhaust failures with a recent attempt — within backoff window.
-        gatt.probe_failures[addr] = gatt._max_probe_retries
-        gatt._confirmed_probe_last_attempt[addr] = time.monotonic()
-
-        # schedule_probe_for_confirmed_device is suppressed by backoff.
-        gatt.schedule_probe_for_confirmed_device(service_info)
-        mock_hass.async_create_task.assert_not_called()
-
-        # After backoff expires, the probe is scheduled.
-        gatt._confirmed_probe_last_attempt[addr] = (
-            time.monotonic() - CONFIRMED_DEVICE_PROBE_BACKOFF - 1
-        )
-        gatt.schedule_probe_for_confirmed_device(service_info)
-        mock_hass.async_create_task.assert_called_once()
-
-    def test_remove_device_clears_confirmed_probe_state(self) -> None:
-        """Test remove_device clears _confirmed_probe_last_attempt."""
-        import time
-
-        mock_hass = MagicMock()
-        coord = _make_coordinator(mock_hass)
-        gatt = coord.gatt_manager
-
-        addr = "AA:BB:CC:DD:EE:FF"
-        gatt._confirmed_probe_last_attempt[addr] = time.monotonic()
-        gatt.probe_failures[addr] = 2
-
-        gatt.remove_device(addr)
-
-        assert addr not in gatt._confirmed_probe_last_attempt
-        assert addr not in gatt.probe_failures
